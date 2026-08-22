@@ -568,7 +568,7 @@ jobs:
   linux:
     name: Linux x64 portable
 
-    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-build-') || startsWith(github.ref_name, 'stage-linux-'))) || inputs.build_linux) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
+    if: ${{ always() && ((github.event_name == 'push' && startsWith(github.ref_name, 'stage-linux-')) || inputs.build_linux) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
     needs: quality
 
@@ -766,7 +766,7 @@ jobs:
   apple:
     name: Apple platform packages
 
-    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-build-') || startsWith(github.ref_name, 'stage-apple-') || startsWith(github.ref_name, 'stage-ios-'))) || inputs.build_macos || inputs.build_ios) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
+    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-macos-') || startsWith(github.ref_name, 'stage-ios-'))) || inputs.build_macos || inputs.build_ios) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
     needs: quality
 

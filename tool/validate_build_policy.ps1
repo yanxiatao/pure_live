@@ -130,10 +130,11 @@ if ([regex]::Matches($featureWorkflow, '(?m)^\s+default:\s+true\s*$').Count -ne 
 if ($featureWorkflow -match 'stage-build-' -or $featureWorkflow -match 'stage-apple-') {
     throw 'Feature workflow must use precise single-platform stage tags.'
 }
+$publishNeedsPattern = '(?ms)^\s{4}needs:\s*\r?\n\s+- quality\s*\r?\n\s+- android\s*\r?\n\s+- windows\s*\r?\n\s+- linux\s*$'
+if (-not [regex]::IsMatch($featureWorkflow, $publishNeedsPattern)) {
+    throw 'Feature workflow publish-release must need quality, android, windows and linux.'
+}
 foreach ($marker in @(
-    'needs: [quality, android]',
-    'needs: [quality, windows]',
-    'needs: [quality, linux]',
     'cancel-in-progress: false',
     'flutter test --concurrency=12',
     '--target-platform android-arm64',
