@@ -65,3 +65,10 @@ app.*.map.json
 
 # FVM Version Cache
 .fvm/
+
+# Deepwork session state (git-local)
+.slim/deepwork/
+
+# Project-local toolchain caches and tools
+.gradle-home/
+.tools/

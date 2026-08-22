@@ -7,6 +7,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $expectedVersion = ((Get-Content (Join-Path $repoRoot '.fvmrc') -Raw | ConvertFrom-Json).flutter)
+# Keep build dependencies inside the repository: pub packages and Gradle
+# artifacts resolve to project-local caches unless explicitly overridden.
+if (-not $env:PUB_CACHE) {
+    $env:PUB_CACHE = Join-Path $repoRoot '.pub-cache'
+}
+if (-not $env:GRADLE_USER_HOME) {
+    $env:GRADLE_USER_HOME = Join-Path $repoRoot '.gradle-home'
+}
+# Preserve the repository's locked pub mirror so pubspec.lock stays stable.
+if (-not $env:PUB_HOSTED_URL) {
+    $env:PUB_HOSTED_URL = 'https://mirrors.cloud.tencent.com/dart-pub/'
+}
 $candidates = @(
     $env:PURE_LIVE_FLUTTER,
     (Join-Path $repoRoot '.fvm\flutter_sdk\bin\flutter.bat'),
@@ -45,8 +57,12 @@ if ($env:GRADLE_OPTS -notmatch '(?:^|\s)--enable-native-access=ALL-UNNAMED(?:\s|
         Where-Object { $_ }) -join ' '
 }
 $localNuGet = Join-Path $env:LOCALAPPDATA 'Codex\nuget\nuget.exe'
-if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $localNuGet)) {
-    $env:PATH = "$(Split-Path -Parent $localNuGet);$env:PATH"
+$projectNuGet = Join-Path $repoRoot '.tools\nuget\nuget.exe'
+if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) {
+    $nuGetCandidate = @($projectNuGet, $localNuGet) |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    if ($nuGetCandidate) { $env:PATH = "$(Split-Path -Parent $nuGetCandidate);$env:PATH" }
 }
 
 $flutterRoot = Split-Path -Parent (Split-Path -Parent $flutter)
