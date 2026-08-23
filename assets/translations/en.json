@@ -1308,5 +1308,12 @@
     "multiview_immersive_exit": "Exit immersive",
     "multiview_fullscreen": "Fullscreen",
     "multiview_add_cell": "Add view",
-    "multiview_small_low_quality": "Data saver for small views"
-}
+    "multiview_small_low_quality": "Data saver for small views",
+    "multiview_play": "Play",
+    "multiview_pause": "Pause",
+    "multiview_refresh": "Refresh",
+    "multiview_danmaku_settings": "Danmaku settings",
+    "multiview_line_selector": "Line",
+    "multiview_line": "Line {index}",
+    "multiview_volume": "Volume"
+  }

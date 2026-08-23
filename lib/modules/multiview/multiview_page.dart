@@ -6,8 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:remixicon/remixicon.dart';
 
+import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/modules/live_play/controllers/player_state.dart';
+import 'package:pure_live/modules/live_play/pages/danmaku_settings_page.dart';
+import 'package:pure_live/modules/multiview/danmaku/multiview_danmaku_settings_binding.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
 import 'package:pure_live/modules/multiview/multiview_controller.dart';
 import 'package:pure_live/modules/multiview/widgets/multiview_room_picker.dart';
@@ -55,6 +58,10 @@ class _MultiviewPageState extends State<MultiviewPage> {
 
   /// 安全退出进行中标志：防止连按返回/Esc 重复触发退出序列。
   bool _exiting = false;
+
+  /// focus 大画面底部控制条显隐；点击大画面切换（对齐 live_play
+  /// 点按呼出控制条的交互），晋升/切布局时复位隐藏。
+  bool _largeControlsVisible = false;
 
   /// 选台面板当前的目标格下标。
   int _targetCell = 0;
@@ -157,6 +164,11 @@ class _MultiviewPageState extends State<MultiviewPage> {
         // multiview 全屏必须与 live_play 同步置位，否则标题栏残留。
         GlobalPlayerState.to.isFullscreen.value = true;
         await WindowService().doEnterFullScreen();
+        // 手机端进入全屏自动横屏（与普通模式播放的全屏一致）；
+        // 退出时 doExitFullScreen 统一解锁方向，无需在此处理。
+        if (PlatformUtils.isMobile) {
+          await WindowService().landScape();
+        }
       } else {
         GlobalPlayerState.to.isFullscreen.value = false;
         await _restoreSystemFullscreen();
@@ -231,7 +243,12 @@ class _MultiviewPageState extends State<MultiviewPage> {
   }
 
   void _showCellActions(MultiviewCellState state) {
-    final isWide = MediaQuery.sizeOf(context).width > _wideBreakpoint && _displayMode == _DisplayMode.normal;
+    // 手机横屏逻辑宽度同样会超过断点，但侧板选台是桌面形态：
+    // 移动端一律走底部弹窗选台，避免横屏时网格被压缩。
+    final isWide =
+        PlatformUtils.isDesktop &&
+        MediaQuery.sizeOf(context).width > _wideBreakpoint &&
+        _displayMode == _DisplayMode.normal;
     final hasQuality =
         state.status == MultiviewCellStatus.playing && state.qualities.isNotEmpty && state.qualityLoader != null;
     showModalBottomSheet<void>(
@@ -300,7 +317,10 @@ class _MultiviewPageState extends State<MultiviewPage> {
   void _retryCell(MultiviewCellState state) {
     final room = state.room;
     if (room == null) {
-      _openPickerFor(state.index, isWide: MediaQuery.sizeOf(context).width > _wideBreakpoint);
+      _openPickerFor(
+        state.index,
+        isWide: PlatformUtils.isDesktop && MediaQuery.sizeOf(context).width > _wideBreakpoint,
+      );
       return;
     }
     unawaited(controller.assignRoom(state.index, room));
@@ -331,7 +351,8 @@ class _MultiviewPageState extends State<MultiviewPage> {
           ),
           body: LayoutBuilder(
             builder: (context, constraints) {
-              final isWide = constraints.maxWidth > _wideBreakpoint;
+              // 侧板选台是桌面形态；手机横屏保持全宽网格 + 底部弹窗选台。
+              final isWide = PlatformUtils.isDesktop && constraints.maxWidth > _wideBreakpoint;
               return Column(
                 children: [
                   _buildToolbar(),
@@ -400,7 +421,11 @@ class _MultiviewPageState extends State<MultiviewPage> {
                 return SegmentedButton<MultiviewLayout>(
                   showSelectedIcon: false,
                   selected: {layout},
-                  onSelectionChanged: (selection) => controller.setLayout(selection.first),
+                  onSelectionChanged: (selection) {
+                    controller.setLayout(selection.first);
+                    // 切换布局后控制条复位隐藏（仅 focus 布局存在控制条）。
+                    _largeControlsVisible = false;
+                  },
                   segments: [
                     ButtonSegment(
                       value: MultiviewLayout.single,
@@ -534,7 +559,22 @@ class _MultiviewPageState extends State<MultiviewPage> {
           flex: _focusBigFlex,
           child: Padding(
             padding: const EdgeInsets.all(3),
-            child: _buildCellAt(cells, bigIndex, isWide: isWide, showDanmaku: danmakuEnabled, showQualityEntry: true),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: _buildCellAt(
+                    cells,
+                    bigIndex,
+                    isWide: isWide,
+                    showDanmaku: danmakuEnabled,
+                    // 控制条可见时隐藏左下角清晰度 chip：入口已在控制条内。
+                    showQualityEntry: !_largeControlsVisible,
+                  ),
+                ),
+                if (_largeControlsVisible)
+                  Positioned(left: 8, right: 8, bottom: 8, child: _buildLargeControlBar(cells, bigIndex)),
+              ],
+            ),
           ),
         ),
         Expanded(
@@ -577,6 +617,159 @@ class _MultiviewPageState extends State<MultiviewPage> {
     );
   }
 
+  /// 大画面底部控制条：按钮集对齐 live_play 底部栏——
+  /// 播放暂停、刷新、弹幕开关、弹幕设置、清晰度、线路、音量、全屏。
+  /// 点击大画面切换显隐（见 [_largeControlsVisible]）。
+  Widget _buildLargeControlBar(List<MultiviewCellState> cells, int bigIndex) {
+    final state = cells[bigIndex];
+    final iconColor = Colors.white.withValues(alpha: 0.92);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Obx(() {
+            final playing = controller.playingFlags[bigIndex];
+            return _controlBarButton(
+              icon: playing ? Remix.pause_line : Remix.play_line,
+              tooltip: i18n(playing ? 'multiview_pause' : 'multiview_play'),
+              onTap: () => unawaited(controller.toggleCellPlayPause(bigIndex)),
+            );
+          }),
+          _controlBarButton(
+            icon: Remix.refresh_line,
+            tooltip: i18n('multiview_refresh'),
+            onTap: () {
+              final room = state.room;
+              if (room != null) unawaited(controller.assignRoom(bigIndex, room));
+            },
+          ),
+          Obx(() {
+            final enabled = controller.danmakuEnabled.value;
+            return _controlBarButton(
+              icon: CustomIcons.danmaku_open,
+              tooltip: i18n('danmaku'),
+              iconColor: enabled ? Theme.of(context).colorScheme.primary : iconColor,
+              onTap: () => controller.danmakuEnabled.toggle(),
+            );
+          }),
+          _controlBarButton(
+            icon: Remix.settings_3_line,
+            tooltip: i18n('multiview_danmaku_settings'),
+            onTap: _showDanmakuSettings,
+          ),
+          _controlBarButton(
+            icon: Remix.hd_line,
+            tooltip: i18n('select_quality'),
+            onTap: () => _showQualitySheet(state),
+          ),
+          if (state.lines.length > 1)
+            _controlBarButton(
+              icon: Remix.route_line,
+              tooltip: i18n('multiview_line_selector'),
+              onTap: () => _showLineSheet(state),
+            ),
+          _controlBarButton(
+            icon: Remix.volume_down_line,
+            tooltip: i18n('multiview_volume'),
+            onTap: () => _showVolumeSheet(bigIndex),
+          ),
+          _controlBarButton(
+            icon: _displayMode == _DisplayMode.fullscreen ? Remix.fullscreen_exit_line : Remix.fullscreen_line,
+            tooltip: i18n('multiview_fullscreen'),
+            onTap: () => unawaited(
+              _changeDisplayMode(
+                _displayMode == _DisplayMode.fullscreen ? _DisplayMode.normal : _DisplayMode.fullscreen,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 控制条按钮：视频上的白色图标，统一尺寸。
+  Widget _controlBarButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 20, color: iconColor ?? Colors.white.withValues(alpha: 0.92)),
+      onPressed: onTap,
+    );
+  }
+
+  /// 线路选择弹窗（形态与清晰度弹窗一致）。
+  void _showLineSheet(MultiviewCellState state) {
+    if (state.lines.isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < state.lines.length; i++)
+              ListTile(
+                title: Text(i18n('multiview_line', args: {'index': '${i + 1}'})),
+                trailing: i == state.lineIndex ? const Icon(Icons.check_rounded) : null,
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  unawaited(controller.setCellLine(state.index, i));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 音量调节弹窗：拖动即时下发每格会话音量（0.0-1.0）。
+  void _showVolumeSheet(int cellIndex) {
+    var value = controller.cellVolume(cellIndex);
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: Row(
+              children: [
+                const Icon(Remix.volume_down_line),
+                Expanded(
+                  child: Slider(
+                    value: value,
+                    onChanged: (v) {
+                      setSheetState(() => value = v);
+                      unawaited(controller.setCellVolume(cellIndex, v));
+                    },
+                  ),
+                ),
+                const Icon(Remix.volume_up_line),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 弹幕设置面板：复用 live_play 官方面板（含位置预设/显示区域），
+  /// 经 [MultiviewDanmakuSettingsBinding] 透传全局设置。
+  void _showDanmakuSettings() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.of(sheetContext).size.height * 0.72,
+        child: DanmakuSettingsContent(controller: MultiviewDanmakuSettingsBinding(), embedded: true),
+      ),
+    );
+  }
+
   Widget _buildCellAt(
     List<MultiviewCellState> cells,
     int index, {
@@ -600,9 +793,17 @@ class _MultiviewPageState extends State<MultiviewPage> {
         switch (status) {
           case MultiviewCellStatus.playing:
             // 一大多小下点击小格 = 晋升为大画面（声源跟随大画面）；
-            // 其余布局与 focus 大格维持原音频焦点行为。
+            // 新大画面从隐藏控制条开始。
             if (controller.layout.value == MultiviewLayout.focus && controller.focusedCellIndex.value != index) {
               unawaited(controller.promoteCell(index)); // focusedCellIndex 为 Rx，Obx 自行重绘
+              _largeControlsVisible = false;
+              setState(() {});
+              return;
+            }
+            // focus 大格点击 = 切换控制条显隐（对齐 live_play 点按呼出
+            // 控制条的交互）；其余布局维持原音频焦点行为。
+            if (controller.layout.value == MultiviewLayout.focus) {
+              setState(() => _largeControlsVisible = !_largeControlsVisible);
               return;
             }
             controller.setAudioFocus(index);

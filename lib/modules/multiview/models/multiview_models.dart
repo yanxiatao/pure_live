@@ -95,6 +95,8 @@ class MultiviewStreamSource {
     this.qualities = const <LivePlayQuality>[],
     this.qualityIndex = 0,
     this.qualityLoader,
+    this.lines = const <String>[],
+    this.lineIndex = 0,
   });
 
   /// 可直接交给播放内核的媒体地址。
@@ -111,6 +113,12 @@ class MultiviewStreamSource {
 
   /// 后续换档加载器；解析器未提供时该格不支持换档。
   final MultiviewQualityLoader? qualityLoader;
+
+  /// 当前清晰度下的可用线路列表（getPlayUrls 的完整返回）；空表示未提供。
+  final List<String> lines;
+
+  /// 当前线路下标；lines 非空时 [url] 恒等于 lines[lineIndex]。
+  final int lineIndex;
 }
 
 /// multiview 单格的不可变状态快照。
@@ -128,6 +136,9 @@ class MultiviewCellState {
     this.qualities = const <LivePlayQuality>[],
     this.qualityIndex = 0,
     this.qualityLoader,
+    this.headers = const <String, String>{},
+    this.lines = const <String>[],
+    this.lineIndex = 0,
   });
 
   /// 该格在当前布局中的固定下标（0 起）。
@@ -160,6 +171,15 @@ class MultiviewCellState {
   /// 换档加载器（核心层上下文，UI 不消费）；null 表示不支持换档。
   final MultiviewQualityLoader? qualityLoader;
 
+  /// 打开当前线路所需的 HTTP 头；与 lines 同生命周期。
+  final Map<String, String> headers;
+
+  /// 同清晰度下的可用线路列表；空表示未解析或不支持线路切换。
+  final List<String> lines;
+
+  /// 当前线路下标；lines 非空时画面即 lines[lineIndex]。
+  final int lineIndex;
+
   /// 构造一个空白格状态。
   factory MultiviewCellState.empty(int index) => MultiviewCellState(index: index);
 
@@ -176,6 +196,9 @@ class MultiviewCellState {
     int? qualityIndex,
     MultiviewQualityLoader? qualityLoader,
     bool clearQuality = false,
+    Map<String, String>? headers,
+    List<String>? lines,
+    int? lineIndex,
   }) {
     return MultiviewCellState(
       index: index,
@@ -187,6 +210,9 @@ class MultiviewCellState {
       qualities: clearQuality ? const <LivePlayQuality>[] : (qualities ?? this.qualities),
       qualityIndex: clearQuality ? 0 : (qualityIndex ?? this.qualityIndex),
       qualityLoader: clearQuality ? null : (qualityLoader ?? this.qualityLoader),
+      headers: clearQuality ? const <String, String>{} : (headers ?? this.headers),
+      lines: clearQuality ? const <String>[] : (lines ?? this.lines),
+      lineIndex: clearQuality ? 0 : (lineIndex ?? this.lineIndex),
     );
   }
 }

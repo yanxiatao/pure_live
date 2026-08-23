@@ -79,12 +79,13 @@ class MultiviewController extends GetxController {
     final headers = await PlayerController.resolvePlaybackHeaders(site: site, room: detail);
 
     // 换档加载器：同房间各清晰度通用同一组 headers；URL 取空视为解析失败。
+    // 返回源携带完整线路列表（lineIndex 归 0），由控制器按当前线路校正。
     Future<MultiviewStreamSource> loadQuality(LivePlayQuality quality) async {
       final nextUrls = await site.liveSite.getPlayUrls(detail: detail, quality: quality);
       if (nextUrls.isEmpty) {
         throw StateError('multiview: no play urls for $platform/${room.roomId} @ ${quality.quality}');
       }
-      return MultiviewStreamSource(url: nextUrls.first, headers: headers);
+      return MultiviewStreamSource(url: nextUrls.first, headers: headers, lines: nextUrls);
     }
 
     return MultiviewStreamSource(
@@ -93,6 +94,7 @@ class MultiviewController extends GetxController {
       qualities: qualities,
       qualityIndex: qualityIndex,
       qualityLoader: loadQuality,
+      lines: urls,
     );
   }
 
@@ -143,6 +145,19 @@ class MultiviewController extends GetxController {
 
   /// 每格加载纪元，用于丢弃迟到的解析/起播结果（竞态防护）。
   final List<int> _cellEpochs = List<int>.generate(MultiviewLayout.quad.capacity, (_) => 0, growable: true);
+
+  /// 每格播放状态（供 UI 播放/暂停按钮态），与 cells 平行维护；
+  /// 由句柄的播放状态流订阅驱动，临时暂停/恢复即时翻转。
+  final RxList<bool> playingFlags = RxList<bool>(
+    List.generate(MultiviewLayout.quad.capacity, (_) => false, growable: true),
+  );
+
+  /// 每格播放状态流订阅；随句柄创建/释放同步管理，防泄漏。
+  final List<StreamSubscription<bool>?> _playingSubs = List<StreamSubscription<bool>?>.generate(
+    MultiviewLayout.quad.capacity,
+    (_) => null,
+    growable: true,
+  );
 
   /// 音频焦点格下标，默认 0。
   int _audioFocusIndex = 0;
@@ -268,6 +283,8 @@ class MultiviewController extends GetxController {
     }
 
     while (cells.length > capacity) {
+      _playingSubs.removeLast()?.cancel();
+      playingFlags.removeLast();
       cells.removeLast();
       _players.removeLast();
       _cellEpochs.removeLast();
@@ -276,6 +293,8 @@ class MultiviewController extends GetxController {
       cells.add(MultiviewCellState.empty(cells.length));
       _players.add(null);
       _cellEpochs.add(0);
+      playingFlags.add(false);
+      _playingSubs.add(null);
     }
 
     layout.value = newLayout;
@@ -314,6 +333,8 @@ class MultiviewController extends GetxController {
     cells.add(MultiviewCellState.empty(cells.length));
     _players.add(null);
     _cellEpochs.add(0);
+    playingFlags.add(false);
+    _playingSubs.add(null);
   }
 
   /// focus 布局下把 [cellIndex] 格晋升为大画面。
@@ -424,6 +445,13 @@ class MultiviewController extends GetxController {
     }
 
     _players[cellIndex] = handle;
+    _playingSubs[cellIndex]?.cancel();
+    _playingSubs[cellIndex] = handle.playingStream.listen((playing) {
+      if (!_isStale(cellIndex, epoch) && cellIndex < playingFlags.length) {
+        playingFlags[cellIndex] = playing;
+      }
+    });
+    playingFlags[cellIndex] = true;
     _updateCell(
       cellIndex,
       cells[cellIndex].copyWith(
@@ -432,6 +460,9 @@ class MultiviewController extends GetxController {
         qualities: source.qualities,
         qualityIndex: source.qualityIndex,
         qualityLoader: source.qualityLoader,
+        headers: source.headers,
+        lines: source.lines,
+        lineIndex: source.lineIndex,
       ),
     );
     // focus 布局下向非大格分配房间时，新流保持静音起播、不抢声源，
@@ -484,8 +515,14 @@ class MultiviewController extends GetxController {
     }
     if (_isStale(cellIndex, epoch)) return;
 
+    // 换清晰度尽量保持当前线路：新档位线路数不足时回退首线路；
+    // 加载器未提供线路列表时维持原状（兼容假实现/旧解析器）。
+    final hasLines = next.lines.isNotEmpty;
+    final keepLine = hasLines ? (state.lineIndex < next.lines.length ? state.lineIndex : 0) : state.lineIndex;
+    final openUrl = hasLines ? next.lines[keepLine] : next.url;
+
     try {
-      await handle.open(url: next.url, headers: next.headers);
+      await handle.open(url: openUrl, headers: next.headers);
     } catch (error, stackTrace) {
       developer.log(
         'MultiviewController: quality switch open failed for cell $cellIndex',
@@ -498,7 +535,95 @@ class MultiviewController extends GetxController {
     }
     if (_isStale(cellIndex, epoch)) return;
 
-    _updateCell(cellIndex, cells[cellIndex].copyWith(qualityIndex: qualityIndex));
+    _updateCell(
+      cellIndex,
+      cells[cellIndex].copyWith(
+        qualityIndex: qualityIndex,
+        lines: hasLines ? next.lines : null,
+        lineIndex: hasLines ? keepLine : null,
+      ),
+    );
+  }
+
+  /// 切换指定格的线路：同 Player 换流，不重建播放器实例。
+  ///
+  /// 线路列表来自解析阶段 getPlayUrls 的完整返回；换清晰度时线路下标
+  /// 尽量保持（见 [setCellQuality] 的线路保持逻辑）。
+  Future<void> setCellLine(int cellIndex, int lineIndex) async {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    final state = cells[cellIndex];
+    if (state.status != MultiviewCellStatus.playing) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+    if (state.lines.isEmpty) {
+      throw StateError('multiview: cell $cellIndex has no line list');
+    }
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      throw RangeError.range(lineIndex, 0, state.lines.length - 1, 'lineIndex');
+    }
+    if (lineIndex == state.lineIndex) return;
+    final handle = _players[cellIndex];
+    if (handle == null) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+
+    final epoch = ++_cellEpochs[cellIndex];
+    try {
+      await handle.open(url: state.lines[lineIndex], headers: state.headers);
+    } catch (error, stackTrace) {
+      developer.log(
+        'MultiviewController: line switch open failed for cell $cellIndex',
+        name: 'MultiviewController',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _failCell(cellIndex, epoch, MultiviewCellErrorKind.startFailure, error.toString());
+      return;
+    }
+    if (_isStale(cellIndex, epoch)) return;
+
+    _updateCell(cellIndex, cells[cellIndex].copyWith(lineIndex: lineIndex));
+  }
+
+  /// 临时暂停/恢复指定格（不触发释放流程，格状态保持 playing）。
+  Future<void> toggleCellPlayPause(int cellIndex) async {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    if (cells[cellIndex].status != MultiviewCellStatus.playing) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+    final handle = _players[cellIndex];
+    if (handle == null) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+    if (cellIndex >= playingFlags.length) {
+      throw StateError('multiview: playing flag missing for cell $cellIndex');
+    }
+    if (handle.isPlaying) {
+      await handle.pause();
+      playingFlags[cellIndex] = false;
+    } else {
+      await handle.resume();
+      playingFlags[cellIndex] = true;
+    }
+  }
+
+  /// 设置指定格的会话音量（0.0-1.0，不持久化；静音状态独立于音量值）。
+  Future<void> setCellVolume(int cellIndex, double volume) async {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    if (cells[cellIndex].status != MultiviewCellStatus.playing) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+    final handle = _players[cellIndex];
+    if (handle == null) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+    await handle.setVolume(volume);
+  }
+
+  /// 读取指定格的会话音量当前值（供 UI 音量控件初始化）；未起播返回 1.0。
+  double cellVolume(int cellIndex) {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    return _players[cellIndex]?.volume ?? 1.0;
   }
 
   /// 释放指定格并回到 empty。
@@ -615,6 +740,11 @@ class MultiviewController extends GetxController {
     final handle = _players[cellIndex];
     _players[cellIndex] = null;
     _cellEpochs[cellIndex]++;
+    _playingSubs[cellIndex]?.cancel();
+    _playingSubs[cellIndex] = null;
+    if (cellIndex < playingFlags.length) {
+      playingFlags[cellIndex] = false;
+    }
     _updateCell(cellIndex, MultiviewCellState.empty(cellIndex));
     return handle;
   }

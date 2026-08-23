@@ -1308,5 +1308,12 @@
     "multiview_immersive_exit": "退出沉浸",
     "multiview_fullscreen": "全屏",
     "multiview_add_cell": "添加画面",
-    "multiview_small_low_quality": "小格省流"
-}
+    "multiview_small_low_quality": "小格省流",
+    "multiview_play": "播放",
+    "multiview_pause": "暂停",
+    "multiview_refresh": "刷新",
+    "multiview_danmaku_settings": "弹幕设置",
+    "multiview_line_selector": "线路",
+    "multiview_line": "线路 {index}",
+    "multiview_volume": "音量"
+  }

@@ -12,15 +12,30 @@ import 'package:pure_live/modules/multiview/multiview_controller.dart';
 /// 记录调用序列的假单格播放器。
 ///
 /// 所有操作按「名称:动作」写入共享日志，用于断言释放顺序与静音互斥。
+/// 音量模型与真实实现一致：会话音量（sessionVolume）与静音标志（muted）
+/// 相互独立，[volume] 暴露实际输出音量（muted ? 0 : sessionVolume）。
 class _RecordingPlayer implements MultiviewCellPlayerHandle {
   _RecordingPlayer(this._log, this.name);
 
   final List<String> _log;
   final String name;
 
-  double volume = 1.0;
+  /// 会话音量（setVolume 的目标值）。
+  double sessionVolume = 1.0;
+
+  /// 静音标志（起播默认静音）。
+  bool muted = true;
+
+  /// 实际输出音量，兼容既有断言。
+  @override
+  double volume = 0.0;
+
+  /// 播放状态（start/open/resume 置 true，pause/dispose 置 false）。
+  bool playing = false;
+
   int startCalls = 0;
   int openCalls = 0;
+  int resumeCalls = 0;
   Object? startError;
 
   /// 非空时 pause 挂起直至门闩完成，模拟慢速原生释放。
@@ -29,34 +44,68 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
   /// 非空时 disposePlayer 抛出，模拟原生销毁失败。
   Object? disposeError;
 
+  final StreamController<bool> _playingController = StreamController<bool>.broadcast();
+
   @override
   VideoController? get videoController => null;
+
+  @override
+  bool get isPlaying => playing;
+
+  @override
+  Stream<bool> get playingStream => _playingController.stream;
+
+  void _setPlaying(bool value) {
+    playing = value;
+    _playingController.add(value);
+  }
 
   @override
   Future<void> start({required String url, required Map<String, String> headers}) async {
     _log.add('$name:start');
     startCalls++;
     // 契约：一律静音起播。
+    muted = true;
     volume = 0.0;
     final error = startError;
     if (error != null) throw error;
+    _setPlaying(true);
   }
 
   @override
   Future<void> open({required String url, required Map<String, String> headers}) async {
     _log.add('$name:open:$url');
     openCalls++;
+    _setPlaying(true);
   }
 
   @override
   Future<void> setMuted(bool muted) async {
     _log.add('$name:mute:${muted ? 'on' : 'off'}');
-    volume = muted ? 0.0 : 1.0;
+    this.muted = muted;
+    volume = muted ? 0.0 : sessionVolume;
+  }
+
+  @override
+  Future<void> resume() async {
+    _log.add('$name:resume');
+    resumeCalls++;
+    _setPlaying(true);
+  }
+
+  @override
+  Future<void> setVolume(double v) async {
+    _log.add('$name:volume:${v.toStringAsFixed(2)}');
+    sessionVolume = v.clamp(0.0, 1.0);
+    if (!muted) {
+      volume = sessionVolume;
+    }
   }
 
   @override
   Future<void> pause() async {
     _log.add('$name:pause');
+    _setPlaying(false);
     final gate = pauseGate;
     if (gate != null) {
       await gate.future;
@@ -66,6 +115,7 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
   @override
   Future<void> disposePlayer() async {
     _log.add('$name:pDispose');
+    _setPlaying(false);
     final error = disposeError;
     if (error != null) throw error;
   }
@@ -145,8 +195,13 @@ class _Harness {
     // 约定首项最高档、末项最低档，与站点适配器排序一致。
     final qualities = [LivePlayQuality(quality: '原画'), LivePlayQuality(quality: '流畅')];
     final index = preferLowest ? qualities.length - 1 : 0;
+    // 线路 0 保持与旧断言兼容的 URL 形态；线路 1 为查询参数变体。
+    final lines = [
+      'https://stream/$id/${qualities[index].quality}',
+      'https://stream/$id/${qualities[index].quality}?line=1',
+    ];
     return MultiviewStreamSource(
-      url: 'https://stream/$id/${qualities[index].quality}',
+      url: lines[0],
       headers: const {'user-agent': 'test'},
       qualities: qualities,
       qualityIndex: index,
@@ -158,11 +213,10 @@ class _Harness {
         if (loadGate != null) {
           await loadGate.future;
         }
-        return MultiviewStreamSource(
-          url: 'https://stream/$id/${quality.quality}',
-          headers: const {'user-agent': 'test'},
-        );
+        final nextLines = ['https://stream/$id/${quality.quality}', 'https://stream/$id/${quality.quality}?line=1'];
+        return MultiviewStreamSource(url: nextLines[0], headers: const {'user-agent': 'test'}, lines: nextLines);
       },
+      lines: lines,
     );
   }
 
@@ -741,6 +795,99 @@ void main() {
       expect(harness.danmakuEngines['r1']!.log, contains('dm0:stop'));
       expect(harness.danmakuEngines['r9'], isNotNull);
       expect(harness.danmakuEngines['r9']!.log, contains('dm1:start'));
+    });
+
+    test('toggleCellPlayPause 临时暂停与恢复并翻转播放标志', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      expect(controller.playingFlags[0], isTrue);
+      expect(harness.players[0].playing, isTrue);
+
+      await controller.toggleCellPlayPause(0);
+      expect(controller.playingFlags[0], isFalse);
+      expect(harness.players[0].playing, isFalse);
+      // 临时暂停不得触发释放流程：句柄仍在、格状态保持 playing，
+      // 且不产生任何换流（open 计数不变，重建才会走 start）。
+      expect(controller.cells[0].status, MultiviewCellStatus.playing);
+      expect(harness.players[0].openCalls, 0);
+
+      await controller.toggleCellPlayPause(0);
+      expect(controller.playingFlags[0], isTrue);
+      expect(harness.players[0].playing, isTrue);
+      expect(harness.players[0].resumeCalls, 1);
+    });
+
+    test('toggleCellPlayPause 对非 playing 格 Fail Fast', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      expect(() => controller.toggleCellPlayPause(0), throwsStateError);
+    });
+
+    test('setCellVolume 会话音量与静音独立且越界钳制', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      final player = harness.players[0];
+
+      // 焦点格（未静音）：连续音量直接生效。
+      await controller.setCellVolume(0, 0.3);
+      expect(player.sessionVolume, 0.3);
+      expect(player.volume, 0.3);
+
+      // 越界钳制。
+      await controller.setCellVolume(0, 1.5);
+      expect(player.sessionVolume, 1.0);
+      expect(player.volume, 1.0);
+
+      // 静音后设置音量：目标值更新，实际输出保持 0；
+      // 取消静音后按目标值生效（音量/静音相互独立）。
+      await player.setMuted(true);
+      await controller.setCellVolume(0, 0.5);
+      expect(player.sessionVolume, 0.5);
+      expect(player.volume, 0.0);
+      await player.setMuted(false);
+      expect(player.volume, 0.5);
+    });
+
+    test('setCellLine 同实例换线路并更新下标', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      final player = harness.players[0];
+      final openCallsBefore = player.openCalls;
+
+      expect(controller.cells[0].lines.length, 2);
+      await controller.setCellLine(0, 1);
+
+      expect(controller.cells[0].lineIndex, 1);
+      expect(player.openCalls, openCallsBefore + 1);
+      expect(harness.log.last, contains('?line=1'));
+    });
+
+    test('setCellLine 空线路列表与越界下标 Fail Fast', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      expect(() => controller.setCellLine(0, 5), throwsRangeError);
+      // 清空线路后（模拟不支持换线路的解析器）同样 Fail Fast。
+      controller.cells[0] = controller.cells[0].copyWith(clearQuality: true);
+      expect(() => controller.setCellLine(0, 0), throwsStateError);
+    });
+
+    test('换清晰度保持当前线路', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      await controller.setCellLine(0, 1);
+      expect(controller.cells[0].lineIndex, 1);
+
+      // 切到流畅档：线路下标保持 1，URL 为流畅档的线路 1。
+      await controller.setCellQuality(0, 1);
+      expect(controller.cells[0].qualityIndex, 1);
+      expect(controller.cells[0].lineIndex, 1);
+      expect(controller.cells[0].lines.length, 2);
+      expect(harness.log.last, contains('流畅?line=1'));
     });
   });
 }
