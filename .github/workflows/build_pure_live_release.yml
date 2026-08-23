@@ -1,37 +1,37 @@
-name: PureLive Release Build
+name: Build PureLive Release 
 
 on:
   workflow_dispatch:
     inputs:
       build_android:
-        description: Build Android arm64-v8a Release APK
+        description: Build Android APKs for all ABIs
         required: true
         type: boolean
-        default: false
+        default: true
 
       build_windows:
         description: Build Windows EXE and MSIX
         required: true
         type: boolean
-        default: false
+        default: true
 
       build_linux:
         description: Build Linux x64 portable archive
         required: true
         type: boolean
-        default: false
+        default: true
 
       build_macos:
         description: Build macOS universal application archive
         required: true
         type: boolean
-        default: false
+        default: true
 
       build_ios:
         description: Build unsigned iOS app and TrollStore IPA
         required: true
         type: boolean
-        default: false
+        default: true
 
       run_quality:
         description: Run analyze, tests and public interface probes first
@@ -43,7 +43,7 @@ on:
         description: Create a GitHub Release and update releases.json
         required: true
         type: boolean
-        default: false
+        default: true
 
       release_tag:
         description: Release tag (e.g. v1.0.0) – required if create_release is true
@@ -53,8 +53,9 @@ on:
 
   push:
     tags:
+      - "stage-build-*"
       - "stage-linux-*"
-      - "stage-macos-*"
+      - "stage-apple-*"
       - "stage-ios-*"
 
 permissions:
@@ -62,7 +63,7 @@ permissions:
 
 concurrency:
   group: manual-build-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   FLUTTER_VERSION: 3.47.0
@@ -121,7 +122,7 @@ jobs:
         run: flutter --version
 
       - name: Resolve locked packages
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate production AppConfig
         run: |
@@ -133,7 +134,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Test
-        run: flutter test --concurrency=12
+        run: flutter test
 
       - name: Probe public interfaces
         run: python tool/interface_probe.py
@@ -144,7 +145,7 @@ jobs:
 # =========================================================
 
   android:
-    name: Android arm64-v8a
+    name: Android all ABIs
 
     if: ${{ always() && inputs.build_android && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
@@ -176,10 +177,10 @@ jobs:
       - name: Configure Android signing
         shell: bash
         env:
-          KEYSTORE_BASE64: ${{ secrets.PURELIVE_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.PURELIVE_STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.PURELIVE_KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PURELIVE_KEY_ALIAS }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set -euo pipefail
 
@@ -204,7 +205,7 @@ jobs:
           EOF
 
       - name: Resolve locked packages
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate production AppConfig
         run: |
@@ -216,12 +217,11 @@ jobs:
       # Build
       # -----------------------------------------------------
 
-      - name: Build Android arm64-v8a release APK
+      - name: Build Android release APKs
         run: |
           flutter build apk \
             --release \
             --split-per-abi \
-            --target-platform android-arm64 \
             --dart-define=PURELIVE_BUILD_SOURCE=github-manual
 
       # -----------------------------------------------------
@@ -255,11 +255,20 @@ jobs:
           APK_DIR="build/app/outputs/flutter-apk"
 
           test -f "$APK_DIR/app-arm64-v8a-release.apk"
+          test -f "$APK_DIR/app-armeabi-v7a-release.apk"
+          test -f "$APK_DIR/app-x86_64-release.apk"
 
           cp \
             "$APK_DIR/app-arm64-v8a-release.apk" \
             "PureLive-${VERSION}-arm64-v8a-release.apk"
 
+          cp \
+            "$APK_DIR/app-armeabi-v7a-release.apk" \
+            "PureLive-${VERSION}-armeabi-v7a-release.apk"
+
+          cp \
+            "$APK_DIR/app-x86_64-release.apk" \
+            "PureLive-${VERSION}-x86_64-release.apk"
 
       # -----------------------------------------------------
       # SHA256
@@ -270,14 +279,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          for file in PureLive-*-arm64-v8a-release.apk
+          for file in \
+            PureLive-*-arm64-v8a-release.apk \
+            PureLive-*-armeabi-v7a-release.apk \
+            PureLive-*-x86_64-release.apk
           do
             sha256sum "$file" > "$file.sha256"
           done
 
           echo "=== Android checksums ==="
 
-          cat PureLive-*-arm64-v8a-release.apk.sha256
+          cat \
+            PureLive-*-arm64-v8a-release.apk.sha256 \
+            PureLive-*-armeabi-v7a-release.apk.sha256 \
+            PureLive-*-x86_64-release.apk.sha256
 
       # -----------------------------------------------------
       # Upload
@@ -290,6 +305,10 @@ jobs:
           path: |
             PureLive-*-arm64-v8a-release.apk
             PureLive-*-arm64-v8a-release.apk.sha256
+            PureLive-*-armeabi-v7a-release.apk
+            PureLive-*-armeabi-v7a-release.apk.sha256
+            PureLive-*-x86_64-release.apk
+            PureLive-*-x86_64-release.apk.sha256
           if-no-files-found: error
           retention-days: 3
 
@@ -301,9 +320,9 @@ jobs:
   windows:
     name: Windows EXE + MSIX
 
-    if: ${{ always() && inputs.build_windows && (needs.quality.result == 'success' || needs.quality.result == 'skipped') && (needs.android.result == 'success' || needs.android.result == 'skipped') }}
+    if: ${{ always() && inputs.build_windows && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
-    needs: [quality, android]
+    needs: quality
 
     runs-on: windows-latest
 
@@ -386,7 +405,7 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - name: Resolve locked packages
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate production AppConfig
         run: |
@@ -551,9 +570,9 @@ jobs:
   linux:
     name: Linux x64 portable
 
-    if: ${{ always() && ((github.event_name == 'push' && startsWith(github.ref_name, 'stage-linux-')) || inputs.build_linux) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
+    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-build-') || startsWith(github.ref_name, 'stage-linux-'))) || inputs.build_linux) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
-    needs: [quality, windows]
+    needs: quality
 
     runs-on: ubuntu-24.04
 
@@ -632,7 +651,7 @@ jobs:
         run: flutter --version
 
       - name: Resolve locked packages
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate production AppConfig
         run: |
@@ -749,9 +768,9 @@ jobs:
   apple:
     name: Apple platform packages
 
-    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-macos-') || startsWith(github.ref_name, 'stage-ios-'))) || inputs.build_macos || inputs.build_ios) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') && (needs.linux.result == 'success' || needs.linux.result == 'skipped') }}
+    if: ${{ always() && ((github.event_name == 'push' && (startsWith(github.ref_name, 'stage-build-') || startsWith(github.ref_name, 'stage-apple-') || startsWith(github.ref_name, 'stage-ios-'))) || inputs.build_macos || inputs.build_ios) && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
 
-    needs: [quality, linux]
+    needs: quality
 
     runs-on: macos-15
 
@@ -797,7 +816,7 @@ jobs:
           cache: true
 
       - name: Resolve locked packages
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate production AppConfig
         run: |
@@ -829,7 +848,7 @@ jobs:
 # =========================================================
 
       - name: Build macOS release
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         run: |
           flutter build macos \
             --release \
@@ -837,7 +856,7 @@ jobs:
 
       - name: Locate macOS application
         id: macos_app
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -863,7 +882,7 @@ jobs:
           echo "$app_path"
 
       - name: Verify macOS application
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -883,7 +902,7 @@ jobs:
           lipo -info "$executable"
 
       - name: Archive macOS application
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -900,7 +919,7 @@ jobs:
             "PureLive-${VERSION}-macos-universal.zip"
 
       - name: Build macOS DMG
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -916,7 +935,7 @@ jobs:
             "PureLive-${VERSION}-macos-universal.dmg"
 
       - name: Verify macOS packages
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-macos-')) || inputs.build_macos }}
+        if: ${{ (github.event_name == 'push' && !startsWith(github.ref_name, 'stage-ios-')) || inputs.build_macos }}
         shell: bash
         run: |
           set -euo pipefail
@@ -975,7 +994,7 @@ jobs:
 # =========================================================
 
       - name: Build iOS device application
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref_name, 'stage-ios-')) || inputs.build_ios }}
+        if: ${{ github.event_name == 'push' || inputs.build_ios }}
         run: |
           flutter build ios \
             --release \
@@ -1463,6 +1482,8 @@ jobs:
 
           - Android 6.0+
           - ARM64-v8a
+          - armeabi-v7a
+          - x86_64
           - 提供 SHA256 校验文件
 
           ### 🐧 Linux 版
