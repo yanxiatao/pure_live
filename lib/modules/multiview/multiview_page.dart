@@ -7,6 +7,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:remixicon/remixicon.dart';
 
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/modules/live_play/controllers/player_state.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
 import 'package:pure_live/modules/multiview/multiview_controller.dart';
 import 'package:pure_live/modules/multiview/widgets/multiview_room_picker.dart';
@@ -88,6 +89,9 @@ class _MultiviewPageState extends State<MultiviewPage> {
     // 极端路径防御：页面在全屏态被系统直接销毁（路由被移除/上层 offAndTo）
     // 时恢复系统 UI 与窗口状态。doExitFullScreen 幂等，重复调用安全。
     if (_displayMode == _DisplayMode.fullscreen) {
+      // 页面在全屏态被系统直接销毁时，必须复位桌面壳标题栏标志，
+      // 否则整个应用壳的自绘标题栏永久消失。
+      GlobalPlayerState.to.isFullscreen.value = false;
       unawaited(_restoreSystemFullscreen());
     }
     super.dispose();
@@ -149,8 +153,12 @@ class _MultiviewPageState extends State<MultiviewPage> {
 
     try {
       if (enterSystemFullscreen) {
+        // 桌面壳自绘标题栏由该全局标志控制显隐（DesktopManager.buildWithTitleBar），
+        // multiview 全屏必须与 live_play 同步置位，否则标题栏残留。
+        GlobalPlayerState.to.isFullscreen.value = true;
         await WindowService().doEnterFullScreen();
       } else {
+        GlobalPlayerState.to.isFullscreen.value = false;
         await _restoreSystemFullscreen();
       }
     } catch (error, stackTrace) {
@@ -653,21 +661,11 @@ class _MultiviewCellView extends StatelessWidget {
     final showVideo = state.status == MultiviewCellStatus.playing && videoController != null;
     final isDark = theme.brightness == Brightness.dark;
 
-    final (borderColor, borderWidth) = switch ((isAudioFocus, isPickTarget)) {
-      (true, _) => (theme.colorScheme.primary, 2.0),
-      (_, true) => (theme.colorScheme.primary.withValues(alpha: 0.55), 1.5),
-      _ => (theme.dividerColor.withValues(alpha: isDark ? 0.25 : 0.15), 1.0),
-    };
-
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOut,
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        color: showVideo || isDark ? Colors.black : theme.colorScheme.surfaceContainerLow,
-        border: Border.all(color: borderColor, width: borderWidth),
-      ),
+      decoration: BoxDecoration(color: showVideo || isDark ? Colors.black : theme.colorScheme.surfaceContainerLow),
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
