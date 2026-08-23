@@ -3,7 +3,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/common/index.dart';
-import 'package:pure_live/modules/multiview/mv_diag_logger.dart';
 import 'package:pure_live/player/adapters/media_kit_adapter.dart';
 
 /// multiview 单格播放器契约。
@@ -26,12 +25,6 @@ abstract interface class MultiviewCellPlayerHandle {
 
   /// 静音/取消静音（音频焦点切换时由控制器调用）。
   Future<void> setMuted(bool muted);
-
-  // mv-diag: 临时诊断字段——控制器在创建/释放时回填格下标，
-  // 供原生调用点日志标识归属；问题闭环后随全部 [mv-diag] 埋点一并移除。
-  int get diagCellIndex;
-
-  set diagCellIndex(int value);
 
   /// 在既有播放内核上换流（每格清晰度切换）：同 Player 重新 open，
   /// 纹理保持附着、不重建实例；mpv 音量属性跨加载保留，静音状态不丢失。
@@ -71,10 +64,6 @@ class MultiviewCellPlayer implements MultiviewCellPlayerHandle {
   Player? _player;
 
   VideoController? _controller;
-
-  @override
-  // mv-diag: 临时诊断字段，见接口注释。
-  int diagCellIndex = -1;
 
   @override
   VideoController? get videoController => _controller;
@@ -134,39 +123,18 @@ class MultiviewCellPlayer implements MultiviewCellPlayerHandle {
   @override
   Future<void> pause() async {
     final player = _player;
-    // mv-diag: pause 前后打点，定位暂停阶段冻结。
-    _mvDiag('pause begin');
-    if (player == null) {
-      _mvDiag('pause skip (no player)');
-      return;
-    }
+    if (player == null) return;
     await player.pause();
-    _mvDiag('pause done');
   }
 
   @override
   Future<void> disposePlayer() async {
     final player = _player;
-    // mv-diag: disposePlayer 前后打点——最可能冻结的原生调用点；
-    // await player.dispose() 内部含 release 钩子链（纹理摘除/静态表清理），
-    // await 前后均留痕以区分「未进入」与「进入后挂起」。
-    _mvDiag('disposePlayer begin');
     _player = null;
     // 渲染控制器引用一并摘除；其原生清理由 player.dispose 的 release 钩子
     // 全权完成（见接口注释的所有权约定），此处不得直接销毁。
     _controller = null;
-    if (player == null) {
-      _mvDiag('disposePlayer skip (no player)');
-      return;
-    }
-    _mvDiag('awaiting player.dispose (release hooks run here)');
+    if (player == null) return;
     await player.dispose();
-    _mvDiag('disposePlayer done');
-  }
-
-  // mv-diag: 临时诊断埋点辅助（debugPrint + 文件双通道），问题闭环后与本文件
-  // 全部 [mv-diag] 行及 diagCellIndex 一并移除。
-  void _mvDiag(String message) {
-    MvDiagLogger.log(message);
   }
 }
