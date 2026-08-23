@@ -1297,5 +1297,10 @@
     "multiview_error_start": "Failed to start playback: {detail}",
     "multiview_search_hint": "Search streamer or title",
     "multiview_no_rooms_title": "No channels available",
-    "multiview_no_rooms_subtitle": "Follow some streams first, or check the history tab"
+    "multiview_no_rooms_subtitle": "Follow some streams first, or check the history tab",
+    "multiview_immersive": "Immersive",
+    "multiview_immersive_exit": "Exit immersive",
+    "multiview_fullscreen": "Fullscreen",
+    "multiview_add_cell": "Add view",
+    "multiview_small_low_quality": "Data saver for small views"
 }

@@ -1,5 +1,3 @@
-import 'dart:developer' as developer;
-
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -9,9 +7,13 @@ import 'package:pure_live/player/adapters/media_kit_adapter.dart';
 
 /// multiview 单格播放器契约。
 ///
-/// 将操作拆分为 pause / disposeVideoController / disposePlayer 三个独立步骤，
-/// 是为了把「pause → 销毁渲染控制器 → 销毁播放内核」的严格释放顺序
-/// 收敛在控制器的一条释放路径中；真实实现包装 media_kit，测试注入假实现。
+/// 释放路径收敛为 pause → disposePlayer 两步。所有权约定：
+/// 渲染控制器（VideoController）的原生清理全权由 player.dispose 触发的
+/// release 钩子完成（patched media_kit 在该钩子中执行 id/rect notifier
+/// 清理、取消订阅、移除静态表并发送 VideoOutputManager.Dispose），
+/// 应用层不得再直接调用 platform.dispose——那会造成 id/rect 双重销毁，
+/// 触发 ChangeNotifier 断言崩溃（对齐 MediaKitAdapter 主播放器的
+/// 所有权模式，其从不直接销毁渲染控制器）。
 abstract interface class MultiviewCellPlayerHandle {
   /// 该格的渲染控制器，供 UI 的 Video widget 使用；尚未创建时为 null。
   VideoController? get videoController;
@@ -24,13 +26,15 @@ abstract interface class MultiviewCellPlayerHandle {
   /// 静音/取消静音（音频焦点切换时由控制器调用）。
   Future<void> setMuted(bool muted);
 
+  /// 在既有播放内核上换流（每格清晰度切换）：同 Player 重新 open，
+  /// 纹理保持附着、不重建实例；mpv 音量属性跨加载保留，静音状态不丢失。
+  /// 未起播前调用属编程错误，实现必须 Fail Fast。
+  Future<void> open({required String url, required Map<String, String> headers});
+
   /// 释放步骤 1：暂停解码与输出。
   Future<void> pause();
 
-  /// 释放步骤 2：销毁渲染控制器（Flutter 侧纹理引用）。
-  Future<void> disposeVideoController();
-
-  /// 释放步骤 3：销毁播放内核（native 纹理随 Player.dispose 摘除）。
+  /// 释放步骤 2：销毁播放内核；渲染控制器的原生清理随其 release 钩子完成。
   Future<void> disposePlayer();
 }
 
@@ -107,6 +111,16 @@ class MultiviewCellPlayer implements MultiviewCellPlayerHandle {
   }
 
   @override
+  Future<void> open({required String url, required Map<String, String> headers}) async {
+    final player = _player;
+    if (player == null) {
+      // 换流必须发生在已起播的实例上；未起播说明调用方状态机有缺陷。
+      throw StateError('MultiviewCellPlayer: open before start');
+    }
+    await player.open(Media(url, httpHeaders: headers), play: true);
+  }
+
+  @override
   Future<void> pause() async {
     final player = _player;
     if (player == null) return;
@@ -114,29 +128,12 @@ class MultiviewCellPlayer implements MultiviewCellPlayerHandle {
   }
 
   @override
-  Future<void> disposeVideoController() async {
-    final controller = _controller;
-    _controller = null;
-    if (controller == null) return;
-    try {
-      final platform = await controller.platform.future;
-      platform.dispose();
-    } catch (error, stackTrace) {
-      // 渲染控制器可能因起播失败从未完成平台侧创建。此处必须继续走
-      // Player.dispose（native 纹理在其 release 钩子中摘除），因此仅记录不中断。
-      developer.log(
-        'MultiviewCellPlayer: video controller dispose failed',
-        name: 'MultiviewCellPlayer',
-        error: error,
-        stackTrace: stackTrace,
-      );
-    }
-  }
-
-  @override
   Future<void> disposePlayer() async {
     final player = _player;
     _player = null;
+    // 渲染控制器引用一并摘除；其原生清理由 player.dispose 的 release 钩子
+    // 全权完成（见接口注释的所有权约定），此处不得直接销毁。
+    _controller = null;
     if (player == null) return;
     await player.dispose();
   }

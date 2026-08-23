@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 
+import 'package:flame_barrage/flame_barrage.dart';
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/core/interface/live_danmaku.dart';
+import 'package:pure_live/model/live_play_quality.dart';
 import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
 import 'package:pure_live/modules/multiview/cells/multiview_cell_player.dart';
+import 'package:pure_live/modules/multiview/danmaku/multiview_danmaku_session.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
 
 /// 房间对象 → 可播放源解析器。
 ///
 /// 复用站点适配器既有入口（getRoomDetail/getPlayQualites/getPlayUrls），
 /// 禁止在 multiview 内复制解析逻辑；测试注入假实现。
-/// v1 固定取首个清晰度（TODO: 每格清晰度选择）。
-typedef MultiviewStreamResolver = Future<MultiviewStreamSource> Function(LiveRoom room);
+/// [preferLowest] 为小格自动降质联动服务：true 时默认取最低档（列表末项）。
+typedef MultiviewStreamResolver = Future<MultiviewStreamSource> Function(LiveRoom room, {required bool preferLowest});
 
 /// 进入 multiview 时暂停全局播放器的钩子。
 ///
@@ -34,9 +38,17 @@ class MultiviewController extends GetxController {
     MultiviewCellPlayerFactory? playerFactory,
     MultiviewStreamResolver? streamResolver,
     MultiviewGlobalPauseHook? pauseGlobalPlayback,
+    MultiviewDanmakuEngineFactory? danmakuEngineFactory,
   }) : _playerFactory = playerFactory ?? _defaultPlayerFactory,
        _streamResolver = streamResolver ?? _defaultStreamResolver,
-       _pauseGlobalPlayback = pauseGlobalPlayback ?? _defaultPauseGlobalPlayback;
+       _pauseGlobalPlayback = pauseGlobalPlayback ?? _defaultPauseGlobalPlayback,
+       _danmakuEngineFactory = danmakuEngineFactory ?? _defaultDanmakuEngineFactory;
+
+  /// focus（一大多小）布局的格子数上限。
+  ///
+  /// 性能护栏：桌面端多实例解码上限取 9 路，超过后 addCell Fail Fast；
+  /// 小格滚动呈现由 UI 层负责。
+  static const int maxCells = 9;
 
   /// 生产环境每格播放器工厂。
   static MultiviewCellPlayerHandle _defaultPlayerFactory({required int renderWidth, required int renderHeight}) {
@@ -44,7 +56,10 @@ class MultiviewController extends GetxController {
   }
 
   /// 生产环境解析器：完整复用 LivePlayController 同一条站点解析链路。
-  static Future<MultiviewStreamSource> _defaultStreamResolver(LiveRoom room) async {
+  ///
+  /// 同时取回清晰度列表并构造换档加载器闭包（捕获 detail/site/headers），
+  /// 后续 setCellQuality 无需重走 getRoomDetail/getPlayQualites。
+  static Future<MultiviewStreamSource> _defaultStreamResolver(LiveRoom room, {required bool preferLowest}) async {
     final platform = room.platform!;
     final site = Sites.of(platform);
 
@@ -54,14 +69,36 @@ class MultiviewController extends GetxController {
       throw StateError('multiview: no play qualities for $platform/${room.roomId}');
     }
 
-    // ponytail: v1 固定取最高档（列表首项），每格清晰度选择留待后续。
-    final urls = await site.liveSite.getPlayUrls(detail: detail, quality: qualities.first);
+    // 默认最高档（列表首项）；小格自动降质联动开启时小格取最低档（末项）。
+    final qualityIndex = preferLowest ? qualities.length - 1 : 0;
+    final urls = await site.liveSite.getPlayUrls(detail: detail, quality: qualities[qualityIndex]);
     if (urls.isEmpty) {
       throw StateError('multiview: no play urls for $platform/${room.roomId}');
     }
 
     final headers = await PlayerController.resolvePlaybackHeaders(site: site, room: detail);
-    return MultiviewStreamSource(url: urls.first, headers: headers);
+
+    // 换档加载器：同房间各清晰度通用同一组 headers；URL 取空视为解析失败。
+    Future<MultiviewStreamSource> loadQuality(LivePlayQuality quality) async {
+      final nextUrls = await site.liveSite.getPlayUrls(detail: detail, quality: quality);
+      if (nextUrls.isEmpty) {
+        throw StateError('multiview: no play urls for $platform/${room.roomId} @ ${quality.quality}');
+      }
+      return MultiviewStreamSource(url: nextUrls.first, headers: headers);
+    }
+
+    return MultiviewStreamSource(
+      url: urls.first,
+      headers: headers,
+      qualities: qualities,
+      qualityIndex: qualityIndex,
+      qualityLoader: loadQuality,
+    );
+  }
+
+  /// 生产环境弹幕引擎工厂：复用站点适配器的 getDanmaku()。
+  static LiveDanmaku _defaultDanmakuEngineFactory(LiveRoom room) {
+    return Sites.of(room.platform!).liveSite.getDanmaku();
   }
 
   /// 生产环境全局播放静默钩子。
@@ -110,12 +147,42 @@ class MultiviewController extends GetxController {
   /// 音频焦点格下标，默认 0。
   int _audioFocusIndex = 0;
 
+  /// 小格自动降质联动开关（仅 focus 布局生效）。
+  ///
+  /// 开启时：向非大画面格分配房间默认取最低档；晋升格自动换最高档、
+  /// 被降格的原大画面自动换最低档。关闭时一切维持默认（全部最高档，
+  /// 晋升不换流）。
+  final RxBool smallCellsLowQuality = false.obs;
+
+  /// multiview 页级弹幕开关，默认关。
+  ///
+  /// 用户决策：只有大画面开弹幕；本开关同时控制显隐与连接。
+  final RxBool danmakuEnabled = false.obs;
+
+  /// 大画面弹幕渲染入口：UI 直接接 FlameBarrageWidget(controller: ...)。
+  ///
+  /// 会话过滤后的聊天消息经 [BarrageItem] 注入；样式/速度调优归 UI 层。
+  final BarrageController barrageController = BarrageController();
+
   final MultiviewCellPlayerFactory _playerFactory;
   final MultiviewStreamResolver _streamResolver;
   final MultiviewGlobalPauseHook _pauseGlobalPlayback;
+  final MultiviewDanmakuEngineFactory _danmakuEngineFactory;
+
+  /// 大画面弹幕会话：异常自容错（记日志不外抛），绝不影响播放主链路。
+  late final MultiviewDanmakuSession _danmakuSession = MultiviewDanmakuSession(
+    engineFactory: _danmakuEngineFactory,
+    onChatMessage: _forwardChatMessage,
+  );
+
+  /// 响应式监听（onInit 注册，onClose 释放）：弹幕生命周期 + 降质开关 reconcile。
+  final List<Worker> _rxWorkers = <Worker>[];
 
   /// 当前持有音频焦点的格子下标。
   int get audioFocusIndex => _audioFocusIndex;
+
+  /// focus 布局下是否还能追加小格。
+  bool get canAddCell => layout.value == MultiviewLayout.focus && cells.length < maxCells;
 
   @override
   void onInit() {
@@ -131,6 +198,60 @@ class MultiviewController extends GetxController {
         );
       }),
     );
+    // 弹幕会话跟随页级开关与大画面切换；房间变化由各变更点显式触发同步。
+    _rxWorkers.add(everAll([danmakuEnabled, focusedCellIndex], (_) => unawaited(_syncDanmakuSession())));
+    // 降质开关切换后即时 reconcile 在播小格，避免开关只影响后续分配。
+    _rxWorkers.add(ever(smallCellsLowQuality, (_) => unawaited(_reconcileSmallCellQualities())));
+  }
+
+  /// 降质开关切换后的即时 reconcile（仅 focus 布局）。
+  ///
+  /// 开启→在播小格非最低档者降到最低档；关闭→非最高档者升到最高档。
+  /// 走 [setCellQuality] 既有纪元防护与错误态呈现，不绕过任何防护。
+  Future<void> _reconcileSmallCellQualities() async {
+    if (layout.value != MultiviewLayout.focus) return;
+    for (var i = 0; i < cells.length; i++) {
+      if (i == focusedCellIndex.value) continue;
+      final cell = cells[i];
+      if (cell.status != MultiviewCellStatus.playing || _players[i] == null) continue;
+      if (cell.qualities.isEmpty) continue;
+      final targetIndex = smallCellsLowQuality.value ? cell.qualities.length - 1 : 0;
+      if (cell.qualityIndex == targetIndex) continue;
+      await setCellQuality(i, targetIndex);
+    }
+  }
+
+  void _forwardChatMessage(LiveMessage message) {
+    // 与 live_play 的弹幕上屏同构：仅注入内容与颜色，速度等样式归 UI 层。
+    barrageController.send(
+      BarrageItem(
+        content: message.message,
+        userId: message.userId,
+        userName: message.userName,
+        textColor: Color.fromARGB(255, message.color.r, message.color.g, message.color.b),
+      ),
+    );
+  }
+
+  /// 按当前开关/布局/大画面房间同步弹幕会话（幂等）。
+  Future<void> _syncDanmakuSession() async {
+    try {
+      final active = danmakuEnabled.value && layout.value == MultiviewLayout.focus;
+      final room = active ? cells[focusedCellIndex.value].room : null;
+      if (room == null || !MultiviewDanmakuSession.supportsRoom(room)) {
+        await _danmakuSession.disconnect();
+        return;
+      }
+      await _danmakuSession.connect(room);
+    } catch (error, stackTrace) {
+      // 弹幕故障不得影响播放主链路：记录后会话自身状态已由其内部回滚。
+      developer.log(
+        'MultiviewController: danmaku session sync failed',
+        name: 'MultiviewController',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   /// 切换布局。
@@ -175,6 +296,24 @@ class MultiviewController extends GetxController {
     if (_audioFocusIndex >= capacity) {
       _refocusToFirstPlaying(fallback: 0);
     }
+
+    // 布局变化可能改变大画面格（进入/离开 focus），同步弹幕会话。
+    unawaited(_syncDanmakuSession());
+  }
+
+  /// focus 布局下追加一个空白小格（动态容量，滚动呈现由 UI 层负责）。
+  ///
+  /// 仅 focus 布局且未达 [maxCells] 时有效；否则 Fail Fast。
+  Future<void> addCell() async {
+    if (layout.value != MultiviewLayout.focus) {
+      throw StateError('multiview: addCell is only available in focus layout');
+    }
+    if (!canAddCell) {
+      throw StateError('multiview: cell limit reached ($maxCells)');
+    }
+    cells.add(MultiviewCellState.empty(cells.length));
+    _players.add(null);
+    _cellEpochs.add(0);
   }
 
   /// focus 布局下把 [cellIndex] 格晋升为大画面。
@@ -182,10 +321,31 @@ class MultiviewController extends GetxController {
   /// 交互模型（YouTube TV 聚焦式）：只切换「哪个格显示为大」，
   /// 播放器实例不迁移、不重建、不重新解析，各路播放状态完整保留；
   /// 音频焦点跟随新的大画面，即大画面成为唯一声音来源。
-  void promoteCell(int cellIndex) {
+  ///
+  /// 小格自动降质联动开启时（仅 focus 布局）：晋升格非最高档则自动换
+  /// 最高档，被降格的原大画面非最低档则自动换最低档——均走同实例换流，
+  /// 不重建播放器。可能触发换流故为异步；UI 层无需等待其完成。
+  Future<void> promoteCell(int cellIndex) async {
     RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    final previousFocused = focusedCellIndex.value;
     focusedCellIndex.value = cellIndex;
     setAudioFocus(cellIndex);
+
+    if (!smallCellsLowQuality.value || layout.value != MultiviewLayout.focus) return;
+
+    // 晋升格：非最高档自动换最高档。
+    final promoted = cells[cellIndex];
+    if (_players[cellIndex] != null && promoted.qualities.isNotEmpty && promoted.qualityIndex != 0) {
+      await setCellQuality(cellIndex, 0);
+    }
+    // 被降格的原大画面：非最低档自动换最低档。
+    if (previousFocused == cellIndex || previousFocused < 0 || previousFocused >= cells.length) return;
+    final demoted = cells[previousFocused];
+    if (_players[previousFocused] != null &&
+        demoted.qualities.isNotEmpty &&
+        demoted.qualityIndex != demoted.qualities.length - 1) {
+      await setCellQuality(previousFocused, demoted.qualities.length - 1);
+    }
   }
 
   /// 向指定格分配房间并起播；成功后该格自动成为音频焦点。
@@ -217,12 +377,19 @@ class MultiviewController extends GetxController {
         status: MultiviewCellStatus.resolving,
         clearError: true,
         clearVideoController: true,
+        // 清空旧房间的清晰度上下文：解析失败时错误态快照不得残留
+        // 旧清晰度表/换档闭包，否则 UI 会展示与新房间无关的档位。
+        clearQuality: true,
       ),
     );
 
+    // 小格自动降质联动（仅 focus 布局）：向非大画面格分配时默认取最低档。
+    final preferLowest =
+        smallCellsLowQuality.value && layout.value == MultiviewLayout.focus && cellIndex != focusedCellIndex.value;
+
     final MultiviewStreamSource source;
     try {
-      source = await _streamResolver(room);
+      source = await _streamResolver(room, preferLowest: preferLowest);
     } catch (error, stackTrace) {
       developer.log(
         'MultiviewController: resolve stream failed for ${room.platform}/${room.roomId}',
@@ -259,7 +426,13 @@ class MultiviewController extends GetxController {
     _players[cellIndex] = handle;
     _updateCell(
       cellIndex,
-      cells[cellIndex].copyWith(status: MultiviewCellStatus.playing, videoController: handle.videoController),
+      cells[cellIndex].copyWith(
+        status: MultiviewCellStatus.playing,
+        videoController: handle.videoController,
+        qualities: source.qualities,
+        qualityIndex: source.qualityIndex,
+        qualityLoader: source.qualityLoader,
+      ),
     );
     // focus 布局下向非大格分配房间时，新流保持静音起播、不抢声源，
     // 用户点击晋升（promoteCell）才出声；其余布局维持「新格即声源」。
@@ -267,6 +440,65 @@ class MultiviewController extends GetxController {
     if (shouldTakeAudioFocus) {
       setAudioFocus(cellIndex);
     }
+    // 大画面房间可能已变化，同步弹幕会话（幂等）。
+    unawaited(_syncDanmakuSession());
+  }
+
+  /// 切换指定格的清晰度：同 Player 换流，不重建播放器实例。
+  ///
+  /// 纪元推进防竞态——换流期间该格被重新分配时，迟到的换流结果被丢弃。
+  /// URL 取回失败置 resolveFailure、open 失败置 startFailure，
+  /// 均按 [_failCell] 既有模式呈现。
+  Future<void> setCellQuality(int cellIndex, int qualityIndex) async {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    final state = cells[cellIndex];
+    if (state.qualities.isEmpty) {
+      throw StateError('multiview: cell $cellIndex has no quality list');
+    }
+    if (qualityIndex < 0 || qualityIndex >= state.qualities.length) {
+      throw RangeError.range(qualityIndex, 0, state.qualities.length - 1, 'qualityIndex');
+    }
+    final loader = state.qualityLoader;
+    if (loader == null) {
+      throw StateError('multiview: cell $cellIndex has no quality loader');
+    }
+    if (qualityIndex == state.qualityIndex) return;
+    final handle = _players[cellIndex];
+    if (handle == null) {
+      throw StateError('multiview: cell $cellIndex is not playing');
+    }
+
+    final epoch = ++_cellEpochs[cellIndex];
+    final MultiviewStreamSource next;
+    try {
+      next = await loader(state.qualities[qualityIndex]);
+    } catch (error, stackTrace) {
+      developer.log(
+        'MultiviewController: quality url resolve failed for cell $cellIndex',
+        name: 'MultiviewController',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _failCell(cellIndex, epoch, MultiviewCellErrorKind.resolveFailure, error.toString());
+      return;
+    }
+    if (_isStale(cellIndex, epoch)) return;
+
+    try {
+      await handle.open(url: next.url, headers: next.headers);
+    } catch (error, stackTrace) {
+      developer.log(
+        'MultiviewController: quality switch open failed for cell $cellIndex',
+        name: 'MultiviewController',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _failCell(cellIndex, epoch, MultiviewCellErrorKind.startFailure, error.toString());
+      return;
+    }
+    if (_isStale(cellIndex, epoch)) return;
+
+    _updateCell(cellIndex, cells[cellIndex].copyWith(qualityIndex: qualityIndex));
   }
 
   /// 释放指定格并回到 empty。
@@ -286,6 +518,8 @@ class MultiviewController extends GetxController {
     if (handle != null) {
       unawaited(_teardown(handle));
     }
+    // 大画面格可能被关闭或焦点转移，同步弹幕会话（幂等）。
+    unawaited(_syncDanmakuSession());
   }
 
   /// 切换音频焦点：仅目标格出声，其余全部静音。
@@ -307,17 +541,46 @@ class MultiviewController extends GetxController {
   }
 
   /// 释放全部格子（页面 onClose 调用），cells 全部回到 empty。
+  ///
+  /// 状态清理同步前置：pop 动画期间 Video widget 可能仍在树中监听渲染
+  /// notifier，必须先摘除全部渲染引用再开始原生销毁；句柄随后在后台
+  /// 串行 teardown，onClose 场景不阻塞路由 pop。
   Future<void> disposeAll() async {
+    final handles = <MultiviewCellPlayerHandle>[];
     for (var i = 0; i < _players.length; i++) {
-      await _releaseSlot(i);
-      _updateCell(i, MultiviewCellState.empty(i));
+      final handle = _captureSlot(i);
+      if (handle != null) {
+        handles.add(handle);
+      }
     }
     _audioFocusIndex = 0;
     focusedCellIndex.value = 0;
+
+    // 弹幕会话先行断开：网络栈清理与播放器销毁互不依赖。
+    unawaited(_danmakuSession.disconnect());
+
+    for (final handle in handles) {
+      try {
+        await _teardown(handle);
+      } catch (error, stackTrace) {
+        // 单个句柄销毁失败不得中断循环，否则后续句柄泄漏；
+        // 记录后继续处理剩余句柄。
+        developer.log(
+          'MultiviewController: cell teardown failed during disposeAll',
+          name: 'MultiviewController',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
   }
 
   @override
   void onClose() {
+    for (final worker in _rxWorkers) {
+      worker.dispose();
+    }
+    _rxWorkers.clear();
     unawaited(disposeAll());
     super.onClose();
   }
@@ -331,9 +594,15 @@ class MultiviewController extends GetxController {
       cellIndex,
       cells[cellIndex].copyWith(status: MultiviewCellStatus.error, errorKind: kind, errorDetail: detail),
     );
+    // 大画面解析/起播失败时其房间状态已不可用，同步弹幕会话
+    // （幂等入口：健康同键会话保持，失效则按当前大画面房间按需重连）。
+    if (layout.value == MultiviewLayout.focus && cellIndex == focusedCellIndex.value) {
+      unawaited(_syncDanmakuSession());
+    }
   }
 
-  /// 统一释放路径：捕获句柄置空 → pause → 销毁渲染控制器 → 销毁播放内核。
+  /// 统一释放路径：捕获句柄置空 → pause → 销毁播放内核
+  /// （渲染控制器原生清理随 player.dispose 的 release 钩子完成）。
   Future<void> _releaseSlot(int cellIndex) async {
     final handle = _captureSlot(cellIndex);
     if (handle != null) {
@@ -352,7 +621,6 @@ class MultiviewController extends GetxController {
 
   Future<void> _teardown(MultiviewCellPlayerHandle handle) async {
     await handle.pause();
-    await handle.disposeVideoController();
     await handle.disposePlayer();
   }
 

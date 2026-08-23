@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:pure_live/common/models/live_room.dart';
+import 'package:pure_live/core/interface/live_danmaku.dart';
+import 'package:pure_live/model/live_play_quality.dart';
 import 'package:pure_live/modules/multiview/cells/multiview_cell_player.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
 import 'package:pure_live/modules/multiview/multiview_controller.dart';
@@ -18,7 +20,14 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
 
   double volume = 1.0;
   int startCalls = 0;
+  int openCalls = 0;
   Object? startError;
+
+  /// 非空时 pause 挂起直至门闩完成，模拟慢速原生释放。
+  Completer<void>? pauseGate;
+
+  /// 非空时 disposePlayer 抛出，模拟原生销毁失败。
+  Object? disposeError;
 
   @override
   VideoController? get videoController => null;
@@ -34,6 +43,12 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
   }
 
   @override
+  Future<void> open({required String url, required Map<String, String> headers}) async {
+    _log.add('$name:open:$url');
+    openCalls++;
+  }
+
+  @override
   Future<void> setMuted(bool muted) async {
     _log.add('$name:mute:${muted ? 'on' : 'off'}');
     volume = muted ? 0.0 : 1.0;
@@ -42,16 +57,37 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
   @override
   Future<void> pause() async {
     _log.add('$name:pause');
-  }
-
-  @override
-  Future<void> disposeVideoController() async {
-    _log.add('$name:vcDispose');
+    final gate = pauseGate;
+    if (gate != null) {
+      await gate.future;
+    }
   }
 
   @override
   Future<void> disposePlayer() async {
     _log.add('$name:pDispose');
+    final error = disposeError;
+    if (error != null) throw error;
+  }
+}
+
+/// 记录调用的假弹幕引擎。
+class _FakeDanmaku extends LiveDanmaku {
+  _FakeDanmaku(this.log, this.name);
+
+  final List<String> log;
+  final String name;
+
+  @override
+  Future<void> start(dynamic args) async {
+    log.add('$name:start');
+    markConnected();
+  }
+
+  @override
+  Future<void> stop() async {
+    log.add('$name:stop');
+    markDisconnected();
   }
 }
 
@@ -62,6 +98,7 @@ class _Harness {
       playerFactory: _factory,
       streamResolver: _resolver,
       pauseGlobalPlayback: () async => globalPauseCalls++,
+      danmakuEngineFactory: _danmakuFactory,
     );
   }
 
@@ -70,8 +107,13 @@ class _Harness {
   final List<(int, int)> requestedSizes = <(int, int)>[];
   final Map<String, Completer<void>> gates = <String, Completer<void>>{};
   final Set<String> resolveFailures = <String>{};
+  final Map<String, bool> resolvePreferences = <String, bool>{};
+  final Map<String, Completer<void>> qualityGates = <String, Completer<void>>{};
+  final Set<String> qualityLoadFailures = <String>{};
+  final Map<String, _FakeDanmaku> danmakuEngines = <String, _FakeDanmaku>{};
   int globalPauseCalls = 0;
   int playerSeq = 0;
+  int danmakuSeq = 0;
 
   /// 下一个工厂产物的起播异常（消费一次）。
   Object? nextStartError;
@@ -90,7 +132,7 @@ class _Harness {
     return player;
   }
 
-  Future<MultiviewStreamSource> _resolver(LiveRoom room) async {
+  Future<MultiviewStreamSource> _resolver(LiveRoom room, {required bool preferLowest}) async {
     final id = room.roomId!;
     if (resolveFailures.contains(id)) {
       throw StateError('resolver boom for $id');
@@ -99,7 +141,35 @@ class _Harness {
     if (gate != null) {
       await gate.future;
     }
-    return MultiviewStreamSource(url: 'https://stream/$id', headers: const {'user-agent': 'test'});
+    resolvePreferences[id] = preferLowest;
+    // 约定首项最高档、末项最低档，与站点适配器排序一致。
+    final qualities = [LivePlayQuality(quality: '原画'), LivePlayQuality(quality: '流畅')];
+    final index = preferLowest ? qualities.length - 1 : 0;
+    return MultiviewStreamSource(
+      url: 'https://stream/$id/${qualities[index].quality}',
+      headers: const {'user-agent': 'test'},
+      qualities: qualities,
+      qualityIndex: index,
+      qualityLoader: (quality) async {
+        if (qualityLoadFailures.contains('$id:${quality.quality}')) {
+          throw StateError('load boom for ${quality.quality}');
+        }
+        final loadGate = qualityGates[id];
+        if (loadGate != null) {
+          await loadGate.future;
+        }
+        return MultiviewStreamSource(
+          url: 'https://stream/$id/${quality.quality}',
+          headers: const {'user-agent': 'test'},
+        );
+      },
+    );
+  }
+
+  LiveDanmaku _danmakuFactory(LiveRoom room) {
+    final engine = _FakeDanmaku(log, 'dm${danmakuSeq++}');
+    danmakuEngines[room.roomId!] = engine;
+    return engine;
   }
 
   /// 让事件循环排空微任务，使后台释放/静音序列完成。
@@ -109,7 +179,7 @@ class _Harness {
   }
 }
 
-LiveRoom _room(String id) => LiveRoom(roomId: id, platform: 'bilibili');
+LiveRoom _room(String id) => LiveRoom(roomId: id, platform: 'bilibili', danmakuData: <String, dynamic>{'id': id});
 
 void main() {
   group('MultiviewController', () {
@@ -183,7 +253,7 @@ void main() {
       await harness.pump();
 
       final releaseOrder = harness.log.where((e) => e.startsWith('p0:')).toList();
-      expect(releaseOrder, ['p0:pause', 'p0:vcDispose', 'p0:pDispose']);
+      expect(releaseOrder, ['p0:pause', 'p0:pDispose']);
       expect(controller.cells[0].status, MultiviewCellStatus.empty);
       expect(controller.cells[0].videoController, isNull);
       // 焦点从被移除的格转移到仍在播放的格。
@@ -208,7 +278,7 @@ void main() {
       expect(controller.cells[1].room?.roomId, 'r1');
       for (final name in ['p2', 'p3']) {
         final order = harness.log.where((e) => e.startsWith('$name:')).toList();
-        expect(order, ['$name:pause', '$name:vcDispose', '$name:pDispose']);
+        expect(order, ['$name:pause', '$name:pDispose']);
       }
       expect(controller.audioFocusIndex, lessThan(2));
     });
@@ -230,11 +300,7 @@ void main() {
         final order = harness.log.where((e) => e.startsWith('${player.name}:')).toList();
         final releaseStart = order.indexOf('${player.name}:pause');
         expect(releaseStart, greaterThan(0), reason: '${player.name} 应先起播再释放');
-        expect(order.sublist(releaseStart), [
-          '${player.name}:pause',
-          '${player.name}:vcDispose',
-          '${player.name}:pDispose',
-        ]);
+        expect(order.sublist(releaseStart), ['${player.name}:pause', '${player.name}:pDispose']);
       }
       expect(controller.audioFocusIndex, 0);
     });
@@ -263,7 +329,7 @@ void main() {
       expect(controller.cells[0].errorKind, MultiviewCellErrorKind.startFailure);
       expect(controller.cells[0].errorDetail, contains('open boom'));
       final order = harness.log.where((e) => e.startsWith('p0:')).toList();
-      expect(order, ['p0:start', 'p0:pause', 'p0:vcDispose', 'p0:pDispose']);
+      expect(order, ['p0:start', 'p0:pause', 'p0:pDispose']);
       // 失败后该格不持有播放器句柄，可重新分配。
       await controller.assignRoom(0, _room('r2'));
       expect(controller.cells[0].status, MultiviewCellStatus.playing);
@@ -279,7 +345,7 @@ void main() {
       await controller.assignRoom(0, _room('r2'));
 
       final order = harness.log.where((e) => e.startsWith('p0:')).toList();
-      expect(order, ['p0:pause', 'p0:vcDispose', 'p0:pDispose']);
+      expect(order, ['p0:pause', 'p0:pDispose']);
       expect(controller.cells[0].status, MultiviewCellStatus.playing);
       expect(controller.cells[0].room?.roomId, 'r2');
       expect(harness.players.length, 2);
@@ -309,7 +375,7 @@ void main() {
       expect(controller.audioFocusIndex, 1);
 
       await controller.setLayout(MultiviewLayout.focus);
-      controller.promoteCell(0);
+      await controller.promoteCell(0);
       await harness.pump();
 
       expect(controller.focusedCellIndex.value, 0);
@@ -325,7 +391,7 @@ void main() {
       final harness = _Harness();
       final controller = harness.controller;
       await controller.setLayout(MultiviewLayout.focus);
-      controller.promoteCell(3);
+      await controller.promoteCell(3);
       expect(controller.focusedCellIndex.value, 3);
 
       await controller.setLayout(MultiviewLayout.dual);
@@ -337,7 +403,7 @@ void main() {
       final harness = _Harness();
       final controller = harness.controller;
       await controller.assignRoom(2, _room('r2'));
-      controller.promoteCell(2);
+      await controller.promoteCell(2);
       expect(controller.focusedCellIndex.value, 2);
 
       await controller.disposeAll();
@@ -378,7 +444,7 @@ void main() {
       expect(smallPlayer.volume, 0.0);
 
       // 用户点击晋升后声音才跟随大画面。
-      controller.promoteCell(2);
+      await controller.promoteCell(2);
       await harness.pump();
       expect(controller.focusedCellIndex.value, 2);
       expect(controller.audioFocusIndex, 2);
@@ -393,7 +459,7 @@ void main() {
       await controller.assignRoom(0, _room('r1'));
       await controller.assignRoom(1, _room('r2'));
       await controller.assignRoom(2, _room('r3'));
-      controller.promoteCell(1);
+      await controller.promoteCell(1);
       expect(controller.focusedCellIndex.value, 1);
 
       controller.removeCell(1);
@@ -402,6 +468,279 @@ void main() {
       expect(controller.focusedCellIndex.value, 0);
       // 音频焦点同样已转移到第一个播放中的格。
       expect(controller.audioFocusIndex, 0);
+    });
+
+    test('disposeAll 同步前置清空全部格状态，后台销毁不阻塞', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(2, _room('r2'));
+      await controller.promoteCell(2);
+
+      // 第一个句柄的 pause 挂起，模拟慢速原生释放。
+      final gate = Completer<void>();
+      harness.players.first.pauseGate = gate;
+
+      final disposing = controller.disposeAll();
+
+      // 未 await 完成：渲染引用与格子状态必须已同步摘除，
+      // 保证 pop 动画期间仍在树中的 Video widget 不会读到已销毁的 notifier。
+      for (final cell in controller.cells) {
+        expect(cell.status, MultiviewCellStatus.empty);
+        expect(cell.videoController, isNull);
+        expect(cell.room, isNull);
+      }
+      expect(controller.focusedCellIndex.value, 0);
+      expect(controller.audioFocusIndex, 0);
+
+      gate.complete();
+      await disposing;
+
+      // 后台串行销毁仍按 pause → disposePlayer 两步完成。
+      expect(harness.log.where((e) => e.endsWith(':pDispose')), hasLength(2));
+    });
+
+    test('disposeAll 单句柄销毁异常不中断其余销毁', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+      harness.players.first.disposeError = StateError('dispose boom');
+
+      await controller.disposeAll();
+
+      // 第一个句柄抛异常后循环继续，第二个句柄仍被完整销毁。
+      expect(harness.log.where((e) => e.endsWith(':pDispose')), hasLength(2));
+      expect(controller.cells.every((cell) => cell.status == MultiviewCellStatus.empty), isTrue);
+    });
+
+    test('focus 下 addCell 动态增长至 maxCells 上限', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.setLayout(MultiviewLayout.focus);
+      expect(controller.canAddCell, isTrue);
+
+      while (controller.canAddCell) {
+        await controller.addCell();
+      }
+
+      expect(controller.cells.length, MultiviewController.maxCells);
+      expect(controller.canAddCell, isFalse);
+      await expectLater(controller.addCell(), throwsStateError);
+    });
+
+    test('非 focus 布局调用 addCell Fail Fast', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      expect(controller.layout.value, MultiviewLayout.quad);
+      expect(controller.canAddCell, isFalse);
+
+      await expectLater(controller.addCell(), throwsStateError);
+      expect(controller.cells.length, MultiviewLayout.quad.capacity);
+    });
+
+    test('setCellQuality 同 Player 换流并更新档位', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      final player = harness.players.first;
+      expect(player.startCalls, 1);
+
+      await controller.setCellQuality(0, 1);
+
+      // 不重建播放器：start 计数不变，走同实例 open 换流。
+      expect(player.startCalls, 1);
+      expect(player.openCalls, 1);
+      expect(harness.log.lastWhere((entry) => entry.startsWith('p0:open')), contains('流畅'));
+      expect(controller.cells[0].qualityIndex, 1);
+      expect(controller.cells[0].status, MultiviewCellStatus.playing);
+
+      // 同档重复设置幂等短路。
+      await controller.setCellQuality(0, 1);
+      expect(player.openCalls, 1);
+    });
+
+    test('setCellQuality 竞态防护：换流期间重新分配则丢弃迟到结果', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      final gate = Completer<void>();
+      harness.qualityGates['r1'] = gate;
+
+      final switching = controller.setCellQuality(0, 1);
+      await harness.pump();
+      // 换流挂起期间该格被重新分配（纪元推进）。
+      await controller.assignRoom(0, _room('r9'));
+      gate.complete();
+      await switching;
+
+      // 迟到的档位更新不得覆盖新分配的状态。
+      expect(controller.cells[0].qualityIndex, 0);
+      expect(controller.cells[0].room?.roomId, 'r9');
+      expect(controller.cells[0].status, MultiviewCellStatus.playing);
+    });
+
+    test('setCellQuality 取流失败置 error', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      harness.qualityLoadFailures.add('r1:流畅');
+      await controller.assignRoom(0, _room('r1'));
+
+      await controller.setCellQuality(0, 1);
+
+      expect(controller.cells[0].status, MultiviewCellStatus.error);
+      expect(controller.cells[0].errorKind, MultiviewCellErrorKind.resolveFailure);
+      expect(controller.cells[0].errorDetail, contains('load boom'));
+    });
+
+    test('降质联动开启：小格取最低档，晋升/降格自动换档', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      controller.smallCellsLowQuality.value = true;
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+
+      // 大格最高档、小格最低档。
+      expect(harness.resolvePreferences['r1'], isFalse);
+      expect(harness.resolvePreferences['r2'], isTrue);
+      expect(controller.cells[0].qualityIndex, 0);
+      expect(controller.cells[1].qualityIndex, 1);
+
+      await controller.promoteCell(1);
+
+      // 晋升格切最高档、原大格降最低档；均同实例换流不重建。
+      expect(controller.focusedCellIndex.value, 1);
+      expect(controller.audioFocusIndex, 1);
+      expect(controller.cells[1].qualityIndex, 0);
+      expect(controller.cells[0].qualityIndex, 1);
+      expect(harness.players[0].startCalls, 1);
+      expect(harness.players[1].startCalls, 1);
+      expect(harness.players[1].openCalls, 1);
+      expect(harness.players[0].openCalls, 1);
+    });
+
+    test('降质联动关闭：晋升不触发任何换流', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+
+      await controller.promoteCell(1);
+
+      expect(harness.resolvePreferences['r1'], isFalse);
+      expect(harness.resolvePreferences['r2'], isFalse);
+      expect(controller.cells[0].qualityIndex, 0);
+      expect(controller.cells[1].qualityIndex, 0);
+      expect(harness.players.map((player) => player.openCalls), everyElement(0));
+    });
+
+    test('弹幕会话跟随页级开关、大画面切换与房间变化', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      controller.onInit();
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+
+      // 开关开启：建立大画面会话。
+      controller.danmakuEnabled.value = true;
+      await harness.pump();
+      expect(harness.danmakuEngines['r1']!.log, contains('dm0:start'));
+
+      // 晋升另一格：旧会话断开、新会话建立。
+      await controller.promoteCell(1);
+      await harness.pump();
+      expect(harness.danmakuEngines['r1']!.log, contains('dm0:stop'));
+      expect(harness.danmakuEngines['r2']!.log, contains('dm1:start'));
+
+      // 大画面房间变化：重连新房间。
+      await controller.assignRoom(1, _room('r3'));
+      await harness.pump();
+      expect(harness.danmakuEngines['r2']!.log, contains('dm1:stop'));
+      expect(harness.danmakuEngines['r3']!.log, contains('dm2:start'));
+
+      // 关闭开关断开会话。
+      controller.danmakuEnabled.value = false;
+      await harness.pump();
+      expect(harness.danmakuEngines['r3']!.log, contains('dm2:stop'));
+    });
+
+    test('例外平台大画面不建立弹幕会话', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      controller.onInit();
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, LiveRoom(roomId: 'ks1', platform: 'kuaishou'));
+
+      controller.danmakuEnabled.value = true;
+      await harness.pump();
+
+      expect(harness.danmakuEngines, isEmpty);
+    });
+
+    test('assignRoom 解析失败后错误态不残留旧清晰度上下文', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      expect(controller.cells[0].qualities, isNotEmpty);
+
+      // 同格换新房间且解析失败：resolving 阶段必须已清空旧清晰度状态。
+      harness.resolveFailures.add('r9');
+      await controller.assignRoom(0, _room('r9'));
+
+      final cell = controller.cells[0];
+      expect(cell.status, MultiviewCellStatus.error);
+      expect(cell.room?.roomId, 'r9');
+      expect(cell.qualities, isEmpty);
+      expect(cell.qualityIndex, 0);
+      expect(cell.qualityLoader, isNull);
+    });
+
+    test('降质开关切换即时 reconcile 在播小格', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      controller.onInit();
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+      // 开关关闭时小格为最高档。
+      expect(controller.cells[1].qualityIndex, 0);
+
+      // 开启：在播小格立即降到最低档（大画面不动）。
+      controller.smallCellsLowQuality.value = true;
+      await harness.pump();
+      expect(controller.cells[1].qualityIndex, 1);
+      expect(controller.cells[0].qualityIndex, 0);
+      expect(harness.players[1].openCalls, 1);
+
+      // 关闭：在播小格立即回升最高档。
+      controller.smallCellsLowQuality.value = false;
+      await harness.pump();
+      expect(controller.cells[1].qualityIndex, 0);
+      expect(harness.players[1].startCalls, 1, reason: 'reconcile 走同实例换流，不重建播放器');
+    });
+
+    test('大画面解析失败触发弹幕会话同步', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      controller.onInit();
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      controller.danmakuEnabled.value = true;
+      await harness.pump();
+      expect(harness.danmakuEngines['r1']!.log, contains('dm0:start'));
+
+      // 大画面重新选台失败：失败路径同步会话——旧房间断开、按当前大画面房间重连。
+      harness.resolveFailures.add('r9');
+      await controller.assignRoom(0, _room('r9'));
+      await harness.pump();
+
+      expect(controller.cells[0].status, MultiviewCellStatus.error);
+      expect(harness.danmakuEngines['r1']!.log, contains('dm0:stop'));
+      expect(harness.danmakuEngines['r9'], isNotNull);
+      expect(harness.danmakuEngines['r9']!.log, contains('dm1:start'));
     });
   });
 }

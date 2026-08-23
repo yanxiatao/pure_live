@@ -1,6 +1,7 @@
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/model/live_play_quality.dart';
 
 /// 多画面布局枚举。
 ///
@@ -75,18 +76,41 @@ enum MultiviewCellErrorKind {
   startFailure,
 }
 
+/// 换档加载器：按目标清晰度取回新的播放源（url + headers）。
+///
+/// 由解析器以闭包形式提供，内部携带 detail/site/headers 等最小上下文，
+/// 使换档无需重走 getRoomDetail/getPlayQualites；核心层可注入假实现测试。
+typedef MultiviewQualityLoader = Future<MultiviewStreamSource> Function(LivePlayQuality quality);
+
 /// 单格播放源解析结果。
 ///
 /// 直播流普遍需要平台鉴权头（Cookie/UA/Referer），因此除 URL 外
 /// 一并携带请求头，交给每格播放器在 open 时使用。
+/// qualities/qualityIndex/qualityLoader 支撑每格清晰度选择与换档：
+/// 解析时一并取回清晰度列表，loader 保留后续换档所需的最小上下文。
 class MultiviewStreamSource {
-  const MultiviewStreamSource({required this.url, required this.headers});
+  const MultiviewStreamSource({
+    required this.url,
+    required this.headers,
+    this.qualities = const <LivePlayQuality>[],
+    this.qualityIndex = 0,
+    this.qualityLoader,
+  });
 
   /// 可直接交给播放内核的媒体地址。
   final String url;
 
   /// 打开该地址所需的 HTTP 头。
   final Map<String, String> headers;
+
+  /// 该房间可用清晰度列表（约定首项为最高档）。
+  final List<LivePlayQuality> qualities;
+
+  /// 本次解析实际采用的档位下标（v1 默认最高档）。
+  final int qualityIndex;
+
+  /// 后续换档加载器；解析器未提供时该格不支持换档。
+  final MultiviewQualityLoader? qualityLoader;
 }
 
 /// multiview 单格的不可变状态快照。
@@ -101,6 +125,9 @@ class MultiviewCellState {
     this.errorKind,
     this.errorDetail,
     this.videoController,
+    this.qualities = const <LivePlayQuality>[],
+    this.qualityIndex = 0,
+    this.qualityLoader,
   });
 
   /// 该格在当前布局中的固定下标（0 起）。
@@ -123,6 +150,16 @@ class MultiviewCellState {
   /// 尚未创建或已释放时为 null。
   final VideoController? videoController;
 
+  /// 该房间可用清晰度列表（约定首项为最高档）；解析阶段一并获取，
+  /// 空列表表示尚未解析或不支持换档。
+  final List<LivePlayQuality> qualities;
+
+  /// 当前档位下标；默认 0（最高档）。
+  final int qualityIndex;
+
+  /// 换档加载器（核心层上下文，UI 不消费）；null 表示不支持换档。
+  final MultiviewQualityLoader? qualityLoader;
+
   /// 构造一个空白格状态。
   factory MultiviewCellState.empty(int index) => MultiviewCellState(index: index);
 
@@ -135,6 +172,10 @@ class MultiviewCellState {
     bool clearError = false,
     VideoController? videoController,
     bool clearVideoController = false,
+    List<LivePlayQuality>? qualities,
+    int? qualityIndex,
+    MultiviewQualityLoader? qualityLoader,
+    bool clearQuality = false,
   }) {
     return MultiviewCellState(
       index: index,
@@ -143,6 +184,9 @@ class MultiviewCellState {
       errorKind: clearError ? null : (errorKind ?? this.errorKind),
       errorDetail: clearError ? null : (errorDetail ?? this.errorDetail),
       videoController: clearVideoController ? null : (videoController ?? this.videoController),
+      qualities: clearQuality ? const <LivePlayQuality>[] : (qualities ?? this.qualities),
+      qualityIndex: clearQuality ? 0 : (qualityIndex ?? this.qualityIndex),
+      qualityLoader: clearQuality ? null : (qualityLoader ?? this.qualityLoader),
     );
   }
 }

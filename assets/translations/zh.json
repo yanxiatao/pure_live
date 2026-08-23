@@ -1297,5 +1297,10 @@
     "multiview_error_start": "起播失败：{detail}",
     "multiview_search_hint": "搜索主播或标题",
     "multiview_no_rooms_title": "暂无可选直播间",
-    "multiview_no_rooms_subtitle": "先去关注几个直播间，或切换到历史记录看看"
+    "multiview_no_rooms_subtitle": "先去关注几个直播间，或切换到历史记录看看",
+    "multiview_immersive": "沉浸模式",
+    "multiview_immersive_exit": "退出沉浸",
+    "multiview_fullscreen": "全屏",
+    "multiview_add_cell": "添加画面",
+    "multiview_small_low_quality": "小格省流"
 }
