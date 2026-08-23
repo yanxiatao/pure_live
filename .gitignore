@@ -53,6 +53,10 @@ app.*.map.json
 /android/app/release
 
 /android/key.properties
+/android/key/
+/windows/packaging/msix/*.password
+/windows/packaging/msix/*.base64.txt
+/windows/packaging/msix/*.pfx
 **/*.jks
 **/*.keystore
 **/*.pfx
