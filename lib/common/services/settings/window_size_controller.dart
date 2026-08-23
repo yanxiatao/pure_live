@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:pure_live/get/get.dart';
 import 'package:pure_live/common/services/utils/hive_rx.dart';
 
+//  需要指定显示到哪一个屏幕 可能存在多个显示屏
 class WindowPipGeometry {
   /// Stores the display ID where the PiP window was last displayed.
   final RxString displayId = hiveString('windows_pip_display_id', '');
@@ -116,6 +117,10 @@ class WindowSizeController extends GetxController {
 
   void updateSize(Size size) {
     windowSize.value = size;
+  }
+
+  void clearWindowsPipGeometry() {
+    windowsPip.clear();
   }
 
   void setTracking(bool tracking) {

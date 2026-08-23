@@ -101,7 +101,7 @@ class FavoriteAreaFloatingButton extends StatelessWidget {
                 height: 32,
                 fit: BoxFit.cover,
                 memCacheWidth: 64,
-                maxWidthDiskCache: 128,
+                // maxWidthDiskCache: 128,
                 fadeInDuration: Duration.zero,
                 fadeOutDuration: Duration.zero,
                 errorWidget: (context, _, _) {

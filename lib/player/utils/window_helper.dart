@@ -1,9 +1,9 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:pure_live/common/services/settings_service.dart';
-
 
 enum WindowLayoutMode { normal, pip }
 

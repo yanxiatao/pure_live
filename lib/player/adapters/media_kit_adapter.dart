@@ -14,10 +14,10 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
 import 'package:pure_live/player/models/player_engine.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
-import 'package:pure_live/common/utils/latest_async_value_queue.dart';
-import 'package:pure_live/player/interface/media_kit_player_accessor.dart';
 import 'package:pure_live/player/utils/live_buffer_policy.dart';
+import 'package:pure_live/common/utils/latest_async_value_queue.dart';
 import 'package:pure_live/player/utils/video_output_size_policy.dart';
+import 'package:pure_live/player/interface/media_kit_player_accessor.dart';
 
 class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   MediaKitAdapter() {
@@ -31,6 +31,9 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   /// 都必须使用同一套属性（seek 白名单、探测时长、LiveBufferPolicy 缓冲上限、
   /// 网络超时、音频驱动、代理、macOS 硬解关闭），避免两处配置漂移。
   static Future<void> applyNativeLiveProperties(dynamic native) async {
+    if (PlatformUtils.isAndroid) {
+      await native.setProperty('force-seekable', 'yes');
+    }
     await native.setProperty('force-seekable', 'yes');
 
     await native.setProperty('protocol_whitelist', 'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto');
@@ -57,6 +60,8 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
 
     if (SettingsService.to.player.customPlayerOutput.v) {
       await native.setProperty('ao', SettingsService.to.player.audioOutputDriver.v);
+    } else if (PlatformUtils.isLinux) {
+      await native.setProperty('ao', 'alsa');
     }
 
     if (SettingsService.to.proxy.enableProxy.v && SettingsService.to.proxy.proxyHost.v.isNotEmpty) {
@@ -67,6 +72,11 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
 
     if (PlatformUtils.isMacOS) {
       await native.setProperty('hwdec', 'no');
+    }
+
+    if (PlatformUtils.isWindows && SettingsService.to.player.enableRtxVsr.value) {
+      await native.setProperty('hwdec', 'd3d11va');
+      await native.setProperty('vf', 'd3d11vpp=scale=2:scaling-mode=nvidia');
     }
   }
 

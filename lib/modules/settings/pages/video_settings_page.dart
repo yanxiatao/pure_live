@@ -195,7 +195,7 @@ class VideoSettingsPage extends GetView<SettingsService> {
                   );
 
                   if (result == true) {
-                    SettingsService.to.window.windowsPip.clear();
+                    SettingsService.to.window.clearWindowsPipGeometry();
                   }
                 },
               ),

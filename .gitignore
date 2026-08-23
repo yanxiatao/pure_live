@@ -76,3 +76,6 @@ app.*.map.json
 # Project-local toolchain caches and tools
 .gradle-home/
 .tools/
+
+# Upstream: generated msix config
+**/.make_config.yaml
