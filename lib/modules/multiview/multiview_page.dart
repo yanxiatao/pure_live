@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flame_barrage/flame_barrage.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:pure_live/common/index.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
 import 'package:pure_live/modules/multiview/multiview_controller.dart';
 import 'package:pure_live/modules/multiview/widgets/multiview_room_picker.dart';
+import 'package:pure_live/player/utils/fullscreen.dart';
 
 /// 页面显示状态机：normal（完整界面）→ immersive（隐藏工具条与侧板，
 /// 留悬浮恢复钮）→ fullscreen（无任何 chrome）。
@@ -80,6 +82,11 @@ class _MultiviewPageState extends State<MultiviewPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _layoutWorker?.dispose();
+    // 极端路径防御：页面在全屏态被系统直接销毁（路由被移除/上层 offAndTo）
+    // 时恢复系统 UI 与窗口状态。doExitFullScreen 幂等，重复调用安全。
+    if (_displayMode == _DisplayMode.fullscreen) {
+      unawaited(_restoreSystemFullscreen());
+    }
     super.dispose();
   }
 
@@ -87,7 +94,7 @@ class _MultiviewPageState extends State<MultiviewPage> {
   void _handleBackIntent({required bool didPop}) {
     if (didPop) return;
     if (_displayMode != _DisplayMode.normal) {
-      setState(() => _displayMode = _DisplayMode.normal);
+      unawaited(_changeDisplayMode(_DisplayMode.normal));
       return;
     }
     Navigator.of(context).pop();
@@ -97,9 +104,44 @@ class _MultiviewPageState extends State<MultiviewPage> {
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.escape) return false;
     if (!mounted || _displayMode == _DisplayMode.normal) return false;
     if (ModalRoute.of(context)?.isCurrent != true) return false;
-    setState(() => _displayMode = _DisplayMode.normal);
+    unawaited(_changeDisplayMode(_DisplayMode.normal));
     return true;
   }
+
+  /// 切换显示模式，并在 normal↔fullscreen 边界同步系统级全屏。
+  ///
+  /// 复用播放器既有机制 [WindowService]：移动端 immersiveSticky 隐藏
+  /// 状态栏/导航栏，桌面端 windowManager.setFullScreen 无边框占满整屏。
+  /// 沉浸模式维持页内隐藏语义，不触碰系统 UI——两档由此形成明确区分。
+  Future<void> _changeDisplayMode(_DisplayMode mode) async {
+    if (!mounted || _displayMode == mode) return;
+    final previous = _displayMode;
+    setState(() => _displayMode = mode);
+
+    final enterSystemFullscreen = mode == _DisplayMode.fullscreen && previous != _DisplayMode.fullscreen;
+    final exitSystemFullscreen = previous == _DisplayMode.fullscreen && mode != _DisplayMode.fullscreen;
+    if (!enterSystemFullscreen && !exitSystemFullscreen) return;
+
+    try {
+      if (enterSystemFullscreen) {
+        await WindowService().doEnterFullScreen();
+      } else {
+        await _restoreSystemFullscreen();
+      }
+    } catch (error, stackTrace) {
+      // 系统 UI/窗口管理器调用失败不得让播放页面崩溃；记录后维持页内
+      // 状态机，用户仍可经回退链再次尝试恢复。
+      developer.log(
+        'MultiviewPage: system fullscreen transition failed',
+        name: 'MultiviewPage',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  /// 恢复系统 UI / 退出窗口全屏；幂等，供所有退出路径与 dispose 防御复用。
+  Future<void> _restoreSystemFullscreen() => WindowService().doExitFullScreen();
 
   int _firstEmptyCell() {
     for (final cell in controller.cells) {
@@ -244,12 +286,12 @@ class _MultiviewPageState extends State<MultiviewPage> {
               IconButton(
                 tooltip: i18n('multiview_immersive'),
                 icon: const Icon(Remix.expand_diagonal_line),
-                onPressed: () => setState(() => _displayMode = _DisplayMode.immersive),
+                onPressed: () => unawaited(_changeDisplayMode(_DisplayMode.immersive)),
               ),
               IconButton(
                 tooltip: i18n('multiview_fullscreen'),
                 icon: const Icon(Remix.fullscreen_line),
-                onPressed: () => setState(() => _displayMode = _DisplayMode.fullscreen),
+                onPressed: () => unawaited(_changeDisplayMode(_DisplayMode.fullscreen)),
               ),
               const SizedBox(width: 4),
             ],
@@ -267,7 +309,9 @@ class _MultiviewPageState extends State<MultiviewPage> {
           ),
         ),
         // 沉浸：无工具条/侧板/AppBar，仅右下角一个小恢复钮。
+        // 黑底画布让格缝读作视频墙的一部分，与播放器观感一致。
         _DisplayMode.immersive => Scaffold(
+          backgroundColor: Colors.black,
           body: Stack(
             children: [
               // 沉浸/全屏下没有可见侧板：空格点击一律走底部选台弹窗。
@@ -275,13 +319,23 @@ class _MultiviewPageState extends State<MultiviewPage> {
               Positioned(
                 right: 16,
                 bottom: 16,
-                child: _ImmersiveRestoreButton(onTap: () => setState(() => _displayMode = _DisplayMode.normal)),
+                child: _ImmersiveRestoreButton(onTap: () => unawaited(_changeDisplayMode(_DisplayMode.normal))),
               ),
             ],
           ),
         ),
-        // 全屏：只保留多路画面，连沉浸恢复钮也不显示。
-        _DisplayMode.fullscreen => Scaffold(body: _buildContentArea(isWide: false)),
+        // 全屏：复用 WindowService 真全屏（移动端隐藏系统栏、桌面端无边框
+        // 占满整屏），并剥离 SafeArea 类系统留白，画面真正 edge-to-edge；
+        // 不显示任何 chrome（连沉浸恢复钮也不显示，退出走 Esc/返回手势）。
+        _DisplayMode.fullscreen => Scaffold(
+          backgroundColor: Colors.black,
+          body: MediaQuery.removePadding(
+            context: context,
+            removeTop: true,
+            removeBottom: true,
+            child: _buildContentArea(isWide: false),
+          ),
+        ),
       },
     );
   }
