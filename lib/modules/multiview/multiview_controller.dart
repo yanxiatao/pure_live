@@ -86,6 +86,12 @@ class MultiviewController extends GetxController {
   /// 当前布局；初始为四画面（本功能的核心形态）。
   final Rx<MultiviewLayout> layout = MultiviewLayout.quad.obs;
 
+  /// focus（一大多小）布局下当前显示为大画面的格子下标，默认 0。
+  ///
+  /// 仅在 focus 布局下有语义；其他布局下无意义但保持合法值
+  /// （始终在当前容量内），供切换布局时无损恢复。
+  final RxInt focusedCellIndex = 0.obs;
+
   /// 单格状态列表，长度恒等于 [layout] 容量。
   final RxList<MultiviewCellState> cells = RxList<MultiviewCellState>(
     List.generate(MultiviewLayout.quad.capacity, MultiviewCellState.empty),
@@ -153,9 +159,33 @@ class MultiviewController extends GetxController {
 
     layout.value = newLayout;
 
+    // 进入 focus 布局时视觉跟随既有声源（零音频扰动），
+    // 避免出现「大画面无声、声音来自某个小格」的失同步。
+    // 进入 focus 时容量为 4，_audioFocusIndex 必在其内，故先同步后钳制安全。
+    if (newLayout == MultiviewLayout.focus) {
+      focusedCellIndex.value = _audioFocusIndex;
+    }
+
+    // 缩容后旧的大画面格可能越界，钳制到新容量内
+    // （与页面选台目标 _targetCell 的整改同一模式，防越界）。
+    if (focusedCellIndex.value >= capacity) {
+      focusedCellIndex.value = capacity - 1;
+    }
+
     if (_audioFocusIndex >= capacity) {
       _refocusToFirstPlaying(fallback: 0);
     }
+  }
+
+  /// focus 布局下把 [cellIndex] 格晋升为大画面。
+  ///
+  /// 交互模型（YouTube TV 聚焦式）：只切换「哪个格显示为大」，
+  /// 播放器实例不迁移、不重建、不重新解析，各路播放状态完整保留；
+  /// 音频焦点跟随新的大画面，即大画面成为唯一声音来源。
+  void promoteCell(int cellIndex) {
+    RangeError.checkValidIndex(cellIndex, cells, 'cellIndex');
+    focusedCellIndex.value = cellIndex;
+    setAudioFocus(cellIndex);
   }
 
   /// 向指定格分配房间并起播；成功后该格自动成为音频焦点。
@@ -231,7 +261,12 @@ class MultiviewController extends GetxController {
       cellIndex,
       cells[cellIndex].copyWith(status: MultiviewCellStatus.playing, videoController: handle.videoController),
     );
-    setAudioFocus(cellIndex);
+    // focus 布局下向非大格分配房间时，新流保持静音起播、不抢声源，
+    // 用户点击晋升（promoteCell）才出声；其余布局维持「新格即声源」。
+    final shouldTakeAudioFocus = layout.value != MultiviewLayout.focus || cellIndex == focusedCellIndex.value;
+    if (shouldTakeAudioFocus) {
+      setAudioFocus(cellIndex);
+    }
   }
 
   /// 释放指定格并回到 empty。
@@ -242,6 +277,11 @@ class MultiviewController extends GetxController {
     final handle = _captureSlot(cellIndex);
     if (_audioFocusIndex == cellIndex) {
       _refocusToFirstPlaying(fallback: cellIndex);
+    }
+    // 关闭大画面格后显示焦点不能空置：转移到第一个播放中的格，无播放格归 0
+    // （与音频焦点的重定位语义对齐）。
+    if (focusedCellIndex.value == cellIndex) {
+      focusedCellIndex.value = _findPlayingCell() ?? 0;
     }
     if (handle != null) {
       unawaited(_teardown(handle));
@@ -273,6 +313,7 @@ class MultiviewController extends GetxController {
       _updateCell(i, MultiviewCellState.empty(i));
     }
     _audioFocusIndex = 0;
+    focusedCellIndex.value = 0;
   }
 
   @override
@@ -315,15 +356,24 @@ class MultiviewController extends GetxController {
     await handle.disposePlayer();
   }
 
-  /// 焦点格失效后转移到第一个播放中的格；没有则落到 [fallback]。
-  void _refocusToFirstPlaying({required int fallback}) {
+  /// 第一个播放中的格下标；没有则返回 null。
+  int? _findPlayingCell() {
     for (var i = 0; i < cells.length; i++) {
       if (cells[i].status == MultiviewCellStatus.playing && _players[i] != null) {
-        setAudioFocus(i);
-        return;
+        return i;
       }
     }
-    _audioFocusIndex = fallback;
+    return null;
+  }
+
+  /// 焦点格失效后转移到第一个播放中的格；没有则落到 [fallback]。
+  void _refocusToFirstPlaying({required int fallback}) {
+    final target = _findPlayingCell();
+    if (target != null) {
+      setAudioFocus(target);
+    } else {
+      _audioFocusIndex = fallback;
+    }
   }
 
   void _updateCell(int cellIndex, MultiviewCellState state) {

@@ -6,7 +6,8 @@ import 'package:pure_live/common/index.dart';
 ///
 /// 每个布局隐含固定的行列划分，用于把屏幕物理像素均分给每个格子，
 /// 作为该格 media_kit 渲染输出（VideoControllerConfiguration.width/height）
-/// 的固定分辨率依据。
+/// 的固定分辨率依据。注意行列划分只服务于渲染分辨率计算，
+/// focus 布局的视觉排布（左大右小列）由 UI 层决定。
 enum MultiviewLayout {
   /// 单画面（1 行 x 1 列）。
   single,
@@ -15,27 +16,35 @@ enum MultiviewLayout {
   dual,
 
   /// 四画面（2 行 x 2 列）。
-  quad;
+  quad,
+
+  /// 一大多小（1 大 + 3 小）。
+  ///
+  /// 渲染分辨率复用 quad 的 2x2 均分数学：大格上采样、小格下采样的
+  /// 画质取舍已接受。
+  // TODO: 晋升大画面时重设该格渲染分辨率（VideoController.setSize），
+  // 大格按整屏均分、小格按剩余区域均分，消除上采样模糊。
+  focus;
 
   /// 当前布局可容纳的格子数量。
   int get capacity => switch (this) {
     MultiviewLayout.single => 1,
     MultiviewLayout.dual => 2,
-    MultiviewLayout.quad => 4,
+    MultiviewLayout.quad || MultiviewLayout.focus => 4,
   };
 
   /// 当前列数（渲染分辨率按列均分宽度）。
   int get columns => switch (this) {
     MultiviewLayout.single => 1,
     MultiviewLayout.dual => 2,
-    MultiviewLayout.quad => 2,
+    MultiviewLayout.quad || MultiviewLayout.focus => 2,
   };
 
   /// 当前行数（渲染分辨率按行均分高度）。
   int get rows => switch (this) {
     MultiviewLayout.single => 1,
     MultiviewLayout.dual => 1,
-    MultiviewLayout.quad => 2,
+    MultiviewLayout.quad || MultiviewLayout.focus => 2,
   };
 }
 

@@ -294,5 +294,114 @@ void main() {
       await harness.pump();
       expect(harness.globalPauseCalls, 1);
     });
+
+    test('focus 布局容量为 4 且渲染均分复用 quad 的 2x2 数学', () {
+      expect(MultiviewLayout.focus.capacity, 4);
+      expect(MultiviewLayout.focus.columns, 2);
+      expect(MultiviewLayout.focus.rows, 2);
+    });
+
+    test('promoteCell 更新大画面格并互斥切换音频焦点', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+      expect(controller.audioFocusIndex, 1);
+
+      await controller.setLayout(MultiviewLayout.focus);
+      controller.promoteCell(0);
+      await harness.pump();
+
+      expect(controller.focusedCellIndex.value, 0);
+      expect(controller.audioFocusIndex, 0);
+      expect(harness.players[0].volume, 1.0);
+      expect(harness.players[1].volume, 0.0);
+      // 聚焦模型：晋升不迁移、不重建播放器实例。
+      expect(harness.log.where((e) => e.startsWith('p0:start')), hasLength(1));
+      expect(harness.log.where((e) => e.startsWith('p1:start')), hasLength(1));
+    });
+
+    test('setLayout quad→focus→dual 钳制越界的 focusedCellIndex', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.setLayout(MultiviewLayout.focus);
+      controller.promoteCell(3);
+      expect(controller.focusedCellIndex.value, 3);
+
+      await controller.setLayout(MultiviewLayout.dual);
+
+      expect(controller.focusedCellIndex.value, 1);
+    });
+
+    test('disposeAll 后 focusedCellIndex 归零', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(2, _room('r2'));
+      controller.promoteCell(2);
+      expect(controller.focusedCellIndex.value, 2);
+
+      await controller.disposeAll();
+
+      expect(controller.focusedCellIndex.value, 0);
+    });
+
+    test('进入 focus 布局时显示焦点同步为音频焦点格', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(2, _room('r2'));
+      expect(controller.audioFocusIndex, 2);
+
+      await controller.setLayout(MultiviewLayout.focus);
+
+      // 视觉跟随既有声源，音频零扰动。
+      expect(controller.focusedCellIndex.value, 2);
+      expect(controller.audioFocusIndex, 2);
+    });
+
+    test('focus 下向非大格选台不抢声源，晋升后才出声', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      expect(controller.audioFocusIndex, 0);
+
+      await controller.assignRoom(2, _room('r2'));
+
+      // 新格 playing 但保持静音，大格仍是唯一声源。
+      final bigPlayer = harness.players.first;
+      final smallPlayer = harness.players.last;
+      expect(controller.cells[2].status, MultiviewCellStatus.playing);
+      expect(controller.audioFocusIndex, 0);
+      expect(controller.focusedCellIndex.value, 0);
+      expect(bigPlayer.volume, 1.0);
+      expect(smallPlayer.volume, 0.0);
+
+      // 用户点击晋升后声音才跟随大画面。
+      controller.promoteCell(2);
+      await harness.pump();
+      expect(controller.focusedCellIndex.value, 2);
+      expect(controller.audioFocusIndex, 2);
+      expect(bigPlayer.volume, 0.0);
+      expect(smallPlayer.volume, 1.0);
+    });
+
+    test('removeCell 关闭大格后显示焦点转移到第一个播放中的格', () async {
+      final harness = _Harness();
+      final controller = harness.controller;
+      await controller.setLayout(MultiviewLayout.focus);
+      await controller.assignRoom(0, _room('r1'));
+      await controller.assignRoom(1, _room('r2'));
+      await controller.assignRoom(2, _room('r3'));
+      controller.promoteCell(1);
+      expect(controller.focusedCellIndex.value, 1);
+
+      controller.removeCell(1);
+
+      expect(controller.cells[1].status, MultiviewCellStatus.empty);
+      expect(controller.focusedCellIndex.value, 0);
+      // 音频焦点同样已转移到第一个播放中的格。
+      expect(controller.audioFocusIndex, 0);
+    });
   });
 }

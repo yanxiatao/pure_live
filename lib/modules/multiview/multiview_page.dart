@@ -11,8 +11,8 @@ import 'package:pure_live/modules/multiview/widgets/multiview_room_picker.dart';
 /// 多画面同看页面。
 ///
 /// 视觉与交互层：按 [MultiviewController] 的布局与格子状态渲染网格，
-/// 提供布局切换（1x1/1x2/2x2）、选台面板（窄屏底部弹窗、宽屏右侧
-/// 常驻侧板）、音频焦点标识与单格操作菜单。播放资源的创建与释放
+/// 提供布局切换（1x1/1x2/2x2/一大多小）、选台面板（窄屏底部弹窗、宽屏
+/// 右侧常驻侧板）、音频焦点标识与单格操作菜单。播放资源的创建与释放
 /// 全部由控制器统一管理，本页面不持有任何播放器对象。
 class MultiviewPage extends StatefulWidget {
   const MultiviewPage({super.key});
@@ -28,13 +28,25 @@ class _MultiviewPageState extends State<MultiviewPage> {
   /// 宽屏侧板宽度，与桌面端设置类页面的侧栏习惯一致。
   static const double _sidePanelWidth = 320;
 
+  /// 一大多小布局的大格与右侧小列的弹性比。
+  static const int _focusBigFlex = 3;
+
+  static const int _focusSmallFlex = 1;
+
   /// 选台面板当前的目标格下标。
   int _targetCell = 0;
 
   /// 布局监听：缩容时把选台目标钳制回有效范围，避免向已不存在的格子提交。
   Worker? _layoutWorker;
 
+  /// 每格 GlobalKey：一大多小晋升时格子跨父级移动（大格槽 ⇄ 小格列），
+  /// 普通 ValueKey 无法跨父级复用元素；GlobalKey 让格子子树整体搬移，
+  /// Video 状态与纹理附着保持不变，切换不闪黑。
+  final Map<int, GlobalKey> _cellKeys = {};
+
   MultiviewController get controller => Get.find<MultiviewController>();
+
+  GlobalKey _cellKey(int index) => _cellKeys.putIfAbsent(index, () => GlobalKey(debugLabel: 'multiview_cell_$index'));
 
   @override
   void initState() {
@@ -196,6 +208,11 @@ class _MultiviewPageState extends State<MultiviewPage> {
                 icon: const Icon(Remix.layout_grid_line),
                 label: const Text('2×2'),
               ),
+              ButtonSegment(
+                value: MultiviewLayout.focus,
+                icon: const Icon(Remix.focus_3_line),
+                label: const Text('1+3'),
+              ),
             ],
           ),
         );
@@ -225,35 +242,73 @@ class _MultiviewPageState extends State<MultiviewPage> {
     return Obx(() {
       final layout = controller.layout.value;
       final cells = controller.cells;
-      return Padding(
-        padding: const EdgeInsets.all(6),
-        child: Column(
-          children: [
-            for (var row = 0; row < layout.rows; row++)
-              Expanded(
-                child: Row(
-                  children: [
-                    for (var col = 0; col < layout.columns; col++)
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: _buildCellAt(cells, row * layout.columns + col, isWide: isWide),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      );
+      final content = layout == MultiviewLayout.focus
+          ? _buildFocusLayout(cells, isWide: isWide)
+          : Column(
+              children: [
+                for (var row = 0; row < layout.rows; row++)
+                  Expanded(
+                    child: Row(
+                      children: [
+                        for (var col = 0; col < layout.columns; col++)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(3),
+                              child: _buildCellAt(cells, row * layout.columns + col, isWide: isWide),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+      return Padding(padding: const EdgeInsets.all(6), child: content);
     });
+  }
+
+  /// 一大多小布局：左侧大格（当前聚焦格）+ 右侧其余三格等分小列。
+  ///
+  /// 窄屏保持同一形态，不做上下变体。格子子树经 GlobalKey 搬移，
+  /// 晋升切换只改变位置，不重建播放画面。
+  Widget _buildFocusLayout(List<MultiviewCellState> cells, {required bool isWide}) {
+    // 核心层已在缩容/释放时钳制 focusedCellIndex，此处再钳一次防竞态越界。
+    final focused = controller.focusedCellIndex.value.clamp(0, cells.length - 1);
+    final others = [
+      for (var i = 0; i < cells.length; i++)
+        if (i != focused) i,
+    ];
+    return Row(
+      children: [
+        Expanded(
+          flex: _focusBigFlex,
+          child: Padding(
+            padding: const EdgeInsets.all(3),
+            child: _buildCellAt(cells, focused, isWide: isWide),
+          ),
+        ),
+        Expanded(
+          flex: _focusSmallFlex,
+          child: Column(
+            children: [
+              for (final i in others)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(3),
+                    child: _buildCellAt(cells, i, isWide: isWide),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildCellAt(List<MultiviewCellState> cells, int index, {required bool isWide}) {
     final state = cells[index];
     final status = state.status;
     return _MultiviewCellView(
-      key: ValueKey('multiview_cell_$index'),
+      key: _cellKey(index),
       state: state,
       isAudioFocus: controller.audioFocusIndex == index && status == MultiviewCellStatus.playing,
       isPickTarget:
@@ -261,6 +316,12 @@ class _MultiviewPageState extends State<MultiviewPage> {
       onTap: () {
         switch (status) {
           case MultiviewCellStatus.playing:
+            // 一大多小下点击小格 = 晋升为大画面（声源跟随大画面）；
+            // 其余布局与 focus 大格维持原音频焦点行为。
+            if (controller.layout.value == MultiviewLayout.focus && controller.focusedCellIndex.value != index) {
+              controller.promoteCell(index); // focusedCellIndex 为 Rx，Obx 自行重绘
+              return;
+            }
             controller.setAudioFocus(index);
             // audioFocusIndex 非 Rx，焦点标识需要手动触发一次重绘。
             setState(() {});
