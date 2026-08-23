@@ -6,6 +6,7 @@ import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/modules/live_play/controllers/danmaku_message_gate.dart';
 import 'package:pure_live/modules/live_play/controllers/danmaku_similarity_filter.dart';
 import 'package:pure_live/modules/live_play/controllers/repeated_danmaku_filter.dart';
+import 'package:pure_live/modules/multiview/mv_diag_logger.dart';
 
 /// 弹幕引擎工厂：按房间创建对应站点的 LiveDanmaku 实例。
 ///
@@ -117,10 +118,14 @@ class MultiviewDanmakuSession {
 
   /// 断开当前会话（幂等）。
   Future<void> disconnect() {
+    // mv-diag: disconnect 入口。
+    _mvDiag('danmaku disconnect begin key=$_sessionKey');
     final request = ++_epoch;
     return _serialize(() async {
       if (request != _epoch) return;
       await _disconnectInternal();
+      // mv-diag: disconnect 完成。
+      _mvDiag('danmaku disconnect done');
     });
   }
 
@@ -128,7 +133,11 @@ class MultiviewDanmakuSession {
     _sessionKey = null;
     final engine = _engine;
     _engine = null;
-    if (engine == null) return;
+    if (engine == null) {
+      // mv-diag: 无活跃引擎，断开为空操作。
+      _mvDiag('danmaku disconnect skip (no engine)');
+      return;
+    }
     engine.onMessage = null;
     engine.onClose = null;
     engine.onReady = null;
@@ -208,9 +217,13 @@ class MultiviewDanmakuSession {
   }
 
   Future<void> _stopEngineQuietly(LiveDanmaku engine) async {
+    // mv-diag: engine.stop 前后打点（网络栈关闭是潜在阻塞点）。
+    _mvDiag('danmaku engine stop begin');
     try {
       await engine.stop().timeout(stopTimeout);
+      _mvDiag('danmaku engine stop done');
     } catch (error, stackTrace) {
+      _mvDiag('danmaku engine stop error: $error');
       developer.log(
         'MultiviewDanmakuSession: engine stop failed',
         name: 'MultiviewDanmakuSession',
@@ -218,6 +231,12 @@ class MultiviewDanmakuSession {
         stackTrace: stackTrace,
       );
     }
+  }
+
+  // mv-diag: 临时诊断埋点辅助（debugPrint + 文件双通道），问题闭环后与本文件
+  // 全部 [mv-diag] 行一并移除。
+  void _mvDiag(String message) {
+    MvDiagLogger.log(message);
   }
 
   Future<void> _serialize(Future<void> Function() operation) {

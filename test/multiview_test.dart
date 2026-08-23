@@ -30,6 +30,10 @@ class _RecordingPlayer implements MultiviewCellPlayerHandle {
   Object? disposeError;
 
   @override
+  // mv-diag: 临时诊断字段（与生产实现同约定），随埋点一并移除。
+  int diagCellIndex = -1;
+
+  @override
   VideoController? get videoController => null;
 
   @override

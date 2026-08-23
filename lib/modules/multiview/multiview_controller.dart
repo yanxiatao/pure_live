@@ -9,6 +9,7 @@ import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
 import 'package:pure_live/modules/multiview/cells/multiview_cell_player.dart';
 import 'package:pure_live/modules/multiview/danmaku/multiview_danmaku_session.dart';
 import 'package:pure_live/modules/multiview/models/multiview_models.dart';
+import 'package:pure_live/modules/multiview/mv_diag_logger.dart';
 
 /// 房间对象 → 可播放源解析器。
 ///
@@ -367,7 +368,7 @@ class MultiviewController extends GetxController {
     final previousHandle = _players[cellIndex];
     _players[cellIndex] = null;
     if (previousHandle != null) {
-      await _teardown(previousHandle);
+      await _teardown(previousHandle, cellIndex);
     }
 
     _updateCell(
@@ -404,6 +405,8 @@ class MultiviewController extends GetxController {
 
     final target = _resolveRenderTarget(layout.value);
     final handle = _playerFactory(renderWidth: target.width.toInt(), renderHeight: target.height.toInt());
+    // mv-diag: 回填诊断用格下标。
+    handle.diagCellIndex = cellIndex;
 
     try {
       await handle.start(url: source.url, headers: source.headers);
@@ -414,12 +417,12 @@ class MultiviewController extends GetxController {
         error: error,
         stackTrace: stackTrace,
       );
-      await _teardown(handle);
+      await _teardown(handle, cellIndex);
       _failCell(cellIndex, epoch, MultiviewCellErrorKind.startFailure, error.toString());
       return;
     }
     if (_isStale(cellIndex, epoch)) {
-      await _teardown(handle);
+      await _teardown(handle, cellIndex);
       return;
     }
 
@@ -516,7 +519,9 @@ class MultiviewController extends GetxController {
       focusedCellIndex.value = _findPlayingCell() ?? 0;
     }
     if (handle != null) {
-      unawaited(_teardown(handle));
+      // mv-diag: 回填诊断用格下标。
+      handle.diagCellIndex = cellIndex;
+      unawaited(_teardown(handle, cellIndex));
     }
     // 大画面格可能被关闭或焦点转移，同步弹幕会话（幂等）。
     unawaited(_syncDanmakuSession());
@@ -546,22 +551,38 @@ class MultiviewController extends GetxController {
   /// notifier，必须先摘除全部渲染引用再开始原生销毁；句柄随后在后台
   /// 串行 teardown，onClose 场景不阻塞路由 pop。
   Future<void> disposeAll() async {
+    // mv-diag: disposeAll 入口。
+    _mvDiag('disposeAll begin players=${_players.whereType<MultiviewCellPlayerHandle>().length}');
     final handles = <MultiviewCellPlayerHandle>[];
     for (var i = 0; i < _players.length; i++) {
       final handle = _captureSlot(i);
       if (handle != null) {
+        handle.diagCellIndex = i;
         handles.add(handle);
       }
     }
     _audioFocusIndex = 0;
     focusedCellIndex.value = 0;
+    // mv-diag: 同步清空完成（此刻起 UI 不再持有任何渲染引用）。
+    _mvDiag('disposeAll state cleared, pending teardown=${handles.length}');
 
     // 弹幕会话先行断开：网络栈清理与播放器销毁互不依赖。
-    unawaited(_danmakuSession.disconnect());
+    // mv-diag: 弹幕断开前后打点。
+    _mvDiag('danmaku disconnect begin');
+    unawaited(
+      _danmakuSession.disconnect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint('[mv-diag] danmaku disconnect error: $error');
+      }),
+    );
 
-    for (final handle in handles) {
+    // mv-diag: 后台串行 teardown 队列开始。
+    _mvDiag('teardown queue start');
+    for (var i = 0; i < handles.length; i++) {
+      final handle = handles[i];
       try {
-        await _teardown(handle);
+        await _teardown(handle, handle.diagCellIndex);
+        // mv-diag: 单句柄 teardown 完成。
+        _mvDiag('teardown queue item done index=$i');
       } catch (error, stackTrace) {
         // 单个句柄销毁失败不得中断循环，否则后续句柄泄漏；
         // 记录后继续处理剩余句柄。
@@ -571,18 +592,26 @@ class MultiviewController extends GetxController {
           error: error,
           stackTrace: stackTrace,
         );
+        // mv-diag: 单句柄 teardown 异常（已容错继续）。
+        _mvDiag('teardown queue item ERROR index=$i error=$error');
       }
     }
+    // mv-diag: disposeAll 全部完成。
+    _mvDiag('disposeAll done');
   }
 
   @override
   void onClose() {
+    // mv-diag: onClose 入口（返回销毁链路起点）。
+    _mvDiag('onClose begin');
     for (final worker in _rxWorkers) {
       worker.dispose();
     }
     _rxWorkers.clear();
     unawaited(disposeAll());
     super.onClose();
+    // mv-diag: onClose 同步段结束（disposeAll 已转入后台执行）。
+    _mvDiag('onClose sync section end');
   }
 
   bool _isStale(int cellIndex, int epoch) => cellIndex >= _cellEpochs.length || _cellEpochs[cellIndex] != epoch;
@@ -606,7 +635,7 @@ class MultiviewController extends GetxController {
   Future<void> _releaseSlot(int cellIndex) async {
     final handle = _captureSlot(cellIndex);
     if (handle != null) {
-      await _teardown(handle);
+      await _teardown(handle, cellIndex);
     }
   }
 
@@ -619,9 +648,22 @@ class MultiviewController extends GetxController {
     return handle;
   }
 
-  Future<void> _teardown(MultiviewCellPlayerHandle handle) async {
+  // mv-diag: teardown 每步前后打点（pause / disposePlayer），
+  // 与单格播放器内部日志按时间戳对齐即可定位冻结步。
+  Future<void> _teardown(MultiviewCellPlayerHandle handle, int? cellIndex) async {
+    final tag = 'cell=${cellIndex ?? -1}';
+    _mvDiag('$tag teardown pause begin');
     await handle.pause();
+    _mvDiag('$tag teardown pause done');
+    _mvDiag('$tag teardown disposePlayer begin');
     await handle.disposePlayer();
+    _mvDiag('$tag teardown disposePlayer done');
+  }
+
+  // mv-diag: 临时诊断埋点辅助（debugPrint + 文件双通道），问题闭环后与本文件
+  // 全部 [mv-diag] 行一并移除。
+  void _mvDiag(String message) {
+    MvDiagLogger.log(message);
   }
 
   /// 第一个播放中的格下标；没有则返回 null。

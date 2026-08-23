@@ -52,6 +52,9 @@ class _MultiviewPageState extends State<MultiviewPage> {
   /// 当前显示模式；仅 chrome 显隐差异，见 [_DisplayMode]。
   _DisplayMode _displayMode = _DisplayMode.normal;
 
+  /// 安全退出进行中标志：防止连按返回/Esc 重复触发退出序列。
+  bool _exiting = false;
+
   /// 选台面板当前的目标格下标。
   int _targetCell = 0;
 
@@ -90,13 +93,35 @@ class _MultiviewPageState extends State<MultiviewPage> {
     super.dispose();
   }
 
-  /// 返回意图统一入口：非 normal 先回 normal，normal 才真正退出页面。
+  /// 返回意图统一入口：非 normal 先回 normal，normal 走安全退出序列。
   void _handleBackIntent({required bool didPop}) {
     if (didPop) return;
     if (_displayMode != _DisplayMode.normal) {
       unawaited(_changeDisplayMode(_DisplayMode.normal));
       return;
     }
+    // normal 态不放行真实 pop：先卸载全部视频外部纹理并等光栅排空，
+    // 再执行显式 pop（见 [_exitSafely] 的竞态说明）。
+    unawaited(_exitSafely());
+  }
+
+  /// 安全退出序列（规避引擎层「外部纹理注销 vs 合成器」竞态）。
+  ///
+  /// 崩溃机理：pop 动画期间 Video 纹理仍存活，光栅线程继续合成多路
+  /// 外部纹理，撞上原生侧纹理注销窗口即空指针。规避时序：
+  /// 1. 同步调用 disposeAll——其内部先同步清空全部格状态，
+  ///    Video 因 status 变 empty 立即从树中卸载，纹理脱离合成器；
+  /// 2. 等待两帧结束，让光栅线程完成一帧不含视频纹理的合成并排空；
+  /// 3. 此时树上已无任何外部纹理，才执行真实 pop。
+  ///
+  /// 控制器 onClose 里对已清空的格再次 disposeAll 是幂等的，无需额外处理。
+  Future<void> _exitSafely() async {
+    if (_exiting) return;
+    _exiting = true;
+    unawaited(controller.disposeAll());
+    await WidgetsBinding.instance.endOfFrame;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     Navigator.of(context).pop();
   }
 
