@@ -59,7 +59,7 @@ on:
       - "stage-ios-*"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: manual-build-${{ github.ref }}
