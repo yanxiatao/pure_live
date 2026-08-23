@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:pure_live/common/index.dart';
 import 'package:date_format/date_format.dart';
 import 'package:pure_live/plugins/utils.dart';
@@ -174,11 +175,8 @@ class WebDavPageController extends GetxController {
       final content = jsonEncode(data);
       final bytes = utf8.encode(content);
 
-      if (dirPath.value == '/') {
-        SnackBarUtil.error(i18n("webdav_select_dir_first"));
-        return;
-      }
-
+      // 根目录（'/'）同样可作为配置目录：dirPath 恒以 '/' 结尾或为根本身，
+      // 拼接结果恒为合法远端路径（'/' + 文件名 = 根下文件）。
       final remotePath = '${dirPath.value}$fileName';
       await _webdavService.client.write(remotePath, bytes);
 
