@@ -43,6 +43,11 @@ jobs:
           echo "upstream new commits: $count"
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Merge upstream (safe)
         id: merge
         if: steps.check.outputs.count != '0'
@@ -50,7 +55,7 @@ jobs:
           if git merge upstream/master --no-edit; then
             echo "merged=true" >> "$GITHUB_OUTPUT"
           else
-            git merge --abort
+            git merge --abort || true
             git status
             echo "merged=false" >> "$GITHUB_OUTPUT"
           fi
