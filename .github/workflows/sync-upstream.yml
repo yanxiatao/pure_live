@@ -1,0 +1,101 @@
+name: Sync upstream and release
+
+# 定时检测上游 liuchuancong/pure_live 的更新：
+# - 能无冲突合并时：自动同步到本仓库 master，并派发 build_pure_live_release.yml 发新 Release；
+# - 存在冲突时：中止合并（master 不受影响），并开 issue 提醒手动处理。
+# 注意：GitHub 会在仓库 60 天无活动后停用定时触发，届时在 Actions 页手动重新启用即可。
+
+on:
+  schedule:
+    # 每天 UTC 18:00（北京时间次日 02:00）
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream master
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout fork master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/liuchuancong/pure_live.git
+          git fetch upstream master
+
+      - name: Check for upstream updates
+        id: check
+        run: |
+          count=$(git rev-list --count HEAD..upstream/master)
+          echo "upstream new commits: $count"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream (safe)
+        id: merge
+        if: steps.check.outputs.count != '0'
+        run: |
+          if git merge upstream/master --no-edit; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            git status
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create conflict issue
+        if: steps.check.outputs.count != '0' && steps.merge.outputs.merged == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --state open --search "上游同步冲突 in:title" --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "上游同步冲突：需要手动合并" \
+              --body "自动同步检测到上游 liuchuancong/pure_live 的更新与本仓库存在合并冲突，已中止合并（master 未受影响）。请本地执行 \`git remote add upstream https://github.com/liuchuancong/pure_live.git && git fetch upstream && git merge upstream/master\` 手动解决冲突后推送。"
+          else
+            echo "conflict issue already open, skip"
+          fi
+
+      - name: Push merged master
+        if: steps.merge.outputs.merged == 'true'
+        run: git push origin master
+
+      - name: Derive release tag from pubspec
+        id: tag
+        if: steps.merge.outputs.merged == 'true'
+        run: |
+          version=$(grep -Po '(?<=^version: )[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml)
+          tag="v$version"
+          echo "derived tag: $tag"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "tag already exists, skip release dispatch"
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "dispatch=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch release build
+        if: steps.tag.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh workflow run build_pure_live_release.yml \
+            --ref master \
+            -f create_release=true \
+            -f run_quality=true \
+            -f release_tag="$RELEASE_TAG"
