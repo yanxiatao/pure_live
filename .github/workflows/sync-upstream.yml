@@ -48,16 +48,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge upstream (safe)
+      - name: Merge upstream (smart)
         id: merge
         if: steps.check.outputs.count != '0'
         run: |
           if git merge upstream/master --no-edit; then
-            echo "merged=true" >> "$GITHUB_OUTPUT"
+            echo "merged=clean" >> "$GITHUB_OUTPUT"
           else
-            git merge --abort || true
-            git status
-            echo "merged=false" >> "$GITHUB_OUTPUT"
+            # 已知安全冲突的自动解法：releases.json 是上游发布数据源，
+            # 冲突时始终以上游为准（本 fork 不维护自己的发布清单）。
+            git checkout --theirs assets/releases.json 2>/dev/null || true
+            git add assets/releases.json 2>/dev/null || true
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              git merge --abort || true
+              git status
+              echo "merged=false" >> "$GITHUB_OUTPUT"
+            else
+              git commit --no-edit
+              echo "merged=resolved" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Create conflict issue
@@ -75,12 +84,12 @@ jobs:
           fi
 
       - name: Push merged master
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged != 'false'
         run: git push origin master
 
       - name: Derive release tag from pubspec
         id: tag
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged != 'false'
         run: |
           version=$(grep -Po '(?<=^version: )[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml)
           tag="v$version"
