@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/modules/account/cookie_validator.dart';
 
 /// Edge CDP cookie 抓取状态。
 enum EdgeCaptureState {
@@ -28,7 +29,15 @@ enum EdgeCaptureState {
 
 /// 平台抓取配置：登录页地址、Cookie 域名与登录态特征 Cookie。
 class EdgeCaptureTarget {
-  const EdgeCaptureTarget({required this.loginUrl, required this.domains, this.characteristicCookies = const []});
+  const EdgeCaptureTarget({
+    required this.platform,
+    required this.loginUrl,
+    required this.domains,
+    this.characteristicCookies = const [],
+  });
+
+  /// 平台标识（与账户模块一致），用于捕获后经平台接口校验登录态。
+  final String platform;
 
   /// 打开的登录页/站点地址。
   final String loginUrl;
@@ -36,22 +45,25 @@ class EdgeCaptureTarget {
   /// Cookie 归属域名（后缀匹配，如 'twitch.tv' 匹配 '.twitch.tv'）。
   final List<String> domains;
 
-  /// 登录态特征 Cookie 名；全部出现时自动完成抓取。
-  /// 空列表表示无法自动判定，依赖用户手动点击「我已登录完成」。
+  /// 登录态特征 Cookie 名；全部出现时触发登录态校验。
+  /// 注意：特征 Cookie 出现不代表登录已完成（如 Twitch 两步验证期间
+  /// 会先下发未激活的 auth-token），需校验通过才收口。
   final List<String> characteristicCookies;
 }
 
 /// 各平台抓取配置（key 与账户模块的平台标识一致）。
 const Map<String, EdgeCaptureTarget> kEdgeCaptureTargets = {
   'douyin': EdgeCaptureTarget(
+    platform: 'douyin',
     loginUrl: 'https://www.douyin.com/',
     domains: ['douyin.com'],
     characteristicCookies: ['sessionid_ss', 'sid_tt'],
   ),
-  'huya': EdgeCaptureTarget(loginUrl: 'https://www.huya.com/', domains: ['huya.com']),
-  'kuaishou': EdgeCaptureTarget(loginUrl: 'https://www.kuaishou.com/', domains: ['kuaishou.com']),
-  'soop': EdgeCaptureTarget(loginUrl: 'https://www.sooplive.co.kr/', domains: ['sooplive.co.kr']),
+  'huya': EdgeCaptureTarget(platform: 'huya', loginUrl: 'https://www.huya.com/', domains: ['huya.com']),
+  'kuaishou': EdgeCaptureTarget(platform: 'kuaishou', loginUrl: 'https://www.kuaishou.com/', domains: ['kuaishou.com']),
+  'soop': EdgeCaptureTarget(platform: 'soop', loginUrl: 'https://www.sooplive.co.kr/', domains: ['sooplive.co.kr']),
   'twitch': EdgeCaptureTarget(
+    platform: 'twitch',
     loginUrl: 'https://www.twitch.tv/login',
     domains: ['twitch.tv'],
     characteristicCookies: ['auth-token'],
@@ -179,14 +191,37 @@ class EdgeCookieCapture {
       }
     });
 
+    // 登录态校验节流：特征 Cookie 出现后每 5 秒最多校验一次，
+    // 避免两步验证窗口期内高频请求平台接口。
+    DateTime? lastValidationAt;
+
     while (!_finished) {
       final cookies = await _fetchCookiesViaCdp(socket);
       if (cookies != null) {
         _lastCookie = _assembleCookieString(cookies);
         final autoDetected = _hasCharacteristicCookies(cookies);
-        if (autoDetected || _manualComplete) {
-          _finish(_lastCookie, EdgeCaptureState.captured);
-          return _lastCookie;
+        if ((autoDetected || _manualComplete) && _lastCookie != null) {
+          // 特征 Cookie 出现不代表登录态已生效：如 Twitch 两步验证期间会先
+          // 下发未激活的 auth-token，此时收口会得到无效 Cookie 并关掉仍在
+          // 验证流程中的浏览器。因此经平台接口校验通过才收口；校验不通过
+          // 则保持 Edge 打开，等待用户完成后续验证步骤。
+          final now = DateTime.now();
+          final shouldValidate =
+              _manualComplete || lastValidationAt == null || now.difference(lastValidationAt).inSeconds >= 5;
+          if (shouldValidate) {
+            lastValidationAt = now;
+            final validation = await CookieValidator.validate(target.platform, _lastCookie!);
+            if (validation == CookieValidationStatus.valid) {
+              _finish(_lastCookie, EdgeCaptureState.captured);
+              return _lastCookie;
+            }
+            if (_manualComplete) {
+              // 用户手动断言完成：尊重操作交出结果（保存链路的校验仍会拦截无效值并提示）。
+              _finish(_lastCookie, EdgeCaptureState.captured);
+              return _lastCookie;
+            }
+            // 自动检测但校验未过：继续轮询等待用户完成验证。
+          }
         }
       }
       // Edge 进程退出（用户关窗）且未手动完成 → 结束。
