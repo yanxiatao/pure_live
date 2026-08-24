@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('AndroidArm64', 'WindowsX64')]
@@ -287,12 +287,8 @@ try {
         if ($developmentFiles) {
             throw "Development-only files appeared in the Windows package: $($developmentFiles.FullName -join ', ')"
         }
-        $obsoleteQuickJsFiles = Get-ChildItem -LiteralPath $windowsPackageFull -Recurse -File |
-            Where-Object { $_.Name -in @('dart_quickjs.dll', 'flutter_js_plugin.dll', 'quickjs_c_bridge.dll') }
-        if ($obsoleteQuickJsFiles) {
-            throw "Retired QuickJS runtime files appeared in the Windows package: $($obsoleteQuickJsFiles.FullName -join ', ')"
-        }
-
+        # 本 fork 有意保留 QuickJS/flutter_js 运行时（yy_site 与 fjs_engine 仍在使用），
+        # 不跟随上游的 QuickJS 退役清理；故此处不做 retired-files 拦截。
         $zipName = if ($Configuration -eq 'Release') {
             "PureLive-$artifactVersion-windows-x64-portable.zip"
         } else {
