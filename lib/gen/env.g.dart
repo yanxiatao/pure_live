@@ -1,17 +1,17 @@
 /// Generated file. Do not edit.
 ///
-/// To regenerate, run: `dart run enven --env-files .env,.env.prod --class-name AppConfig`
+/// To regenerate, run: `dart run enven --env-files .env,.env.dev,.env.prod --class-name AppConfig`
 class AppConfig {
   /// Override this instance to mock the environment.
-  /// Example: `AppConfig.instance = MockAppConfigData();`
-  static AppConfigData instance = AppConfigData();
+  /// Example: `AppConfig.instance = MockEnvData();`
+  static EnvData instance = EnvData();
 
   static String get pureliveUpdateOwner => instance.pureliveUpdateOwner;
   static String get pureliveUpdateRepository => instance.pureliveUpdateRepository;
 }
 
-class AppConfigData {
-  final String pureliveUpdateOwner = 'liuchuancong';
+class EnvData {
+  final String pureliveUpdateOwner = 'yanxiatao';
 
   final String pureliveUpdateRepository = 'pure_live';
 }

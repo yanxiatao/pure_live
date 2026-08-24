@@ -42,6 +42,11 @@ on:
         required: true
         type: string
         default: "v2.7.0"
+      release_sync_note:
+        description: Optional note prepended to the release body (e.g. upstream sync description)
+        required: false
+        type: string
+        default: ""
   push:
     tags:
       - "stage-linux-*"
@@ -844,6 +849,7 @@ jobs:
         run: |
           set -euo pipefail
           cat << EOF > release_body.txt
+          ${{ inputs.release_sync_note }}
           # 纯粹直播 ${{ inputs.release_tag }}
           |版本|下载地址|
           |---|---|

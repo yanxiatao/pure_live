@@ -103,4 +103,5 @@ jobs:
             --ref master \
             -f create_release=true \
             -f run_quality=true \
-            -f release_tag="$RELEASE_TAG"
+            -f release_tag="$RELEASE_TAG" \
+            -f release_sync_note="本 Release 由上游自动同步工作流发出，包含同步 [liuchuancong/pure_live](https://github.com/liuchuancong/pure_live) 上游更新的内容。"

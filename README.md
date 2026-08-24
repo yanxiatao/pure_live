@@ -12,20 +12,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/liuchuancong/pure_live/releases/latest">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/liuchuancong/pure_live">
+  <a href="https://github.com/yanxiatao/pure_live/releases/latest">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/yanxiatao/pure_live">
   </a>
-  <a href="https://github.com/liuchuancong/pure_live/actions/workflows/feature-build.yml">
-    <img alt="Manual Build" src="https://github.com/liuchuancong/pure_live/actions/workflows/feature-build.yml/badge.svg">
+  <a href="https://github.com/yanxiatao/pure_live/actions/workflows/feature-build.yml">
+    <img alt="Manual Build" src="https://github.com/yanxiatao/pure_live/actions/workflows/feature-build.yml/badge.svg">
   </a>
-  <a href="https://github.com/liuchuancong/pure_live">
-    <img alt="Stars" src="https://img.shields.io/github/stars/liuchuancong/pure_live?color=yellow">
+  <a href="https://github.com/yanxiatao/pure_live">
+    <img alt="Stars" src="https://img.shields.io/github/stars/yanxiatao/pure_live?color=yellow">
   </a>
-  <a href="https://github.com/liuchuancong/pure_live/releases">
-    <img alt="Downloads" src="https://img.shields.io/github/downloads/liuchuancong/pure_live/total?style=flat-square">
+  <a href="https://github.com/yanxiatao/pure_live/releases">
+    <img alt="Downloads" src="https://img.shields.io/github/downloads/yanxiatao/pure_live/total?style=flat-square">
   </a>
   <a href="LICENSE">
-    <img alt="License" src="https://img.shields.io/github/license/liuchuancong/pure_live?color=blue">
+    <img alt="License" src="https://img.shields.io/github/license/yanxiatao/pure_live?color=blue">
   </a>
 </p>
 
@@ -33,11 +33,19 @@
 
 > 本维护分支持续同步 [liuchuancong/pure_live](https://github.com/liuchuancong/pure_live)，并维护本机优先构建、正式签名、接口探测、Windows 数据迁移及高刷新率优化。
 
-- **最新稳定版**：[v2.9.4](https://github.com/liuchuancong/pure_live/releases/tag/v2.9.4)
+- **最新稳定版**：[v2.9.4](https://github.com/yanxiatao/pure_live/releases)
 - **当前版本**：`2.9.4+4083`
-- **v2.9.4**：`liuchuancong/pure_live`，包含多画面同看、纯 Dart 平台签名、语言切换与 Windows MSIX 数据路径修复
+- **v2.9.4**：`yanxiatao/pure_live`，包含多画面同看、纯 Dart 平台签名、语言切换与 Windows MSIX 数据路径修复
 - **本轮构建平台**：Android arm64-v8a、Windows x64、Linux x64、macOS Universal、iOS arm64
 - **质量门禁**：Flutter Analyze、自动化测试、接口探测与各平台构建记录见 `docs/STAGE_UPDATE_2_9_4.md`
+
+### 本 fork 增强功能
+
+- **多画面同看（multiview）**：1×1/1×2/2×2/一大多小（大画面 + 可滚动小格，桌面最多 9 路）布局；每格独立播放器、清晰度与线路切换、音频焦点互斥、小格省流模式
+- **Cookie 增强**：各平台 Cookie 保存后自动校验登录态；Windows 端支持 Edge 一键自动抓取（独立临时环境，不污染日常浏览器）
+- **弹幕连接遵循代理**：启用应用代理后，弹幕 WebSocket 经代理连接
+- **Twitch 免代理播放（实验性）**：经公共反向代理获取播放列表，设置 → 网络选项可开关（API 与弹幕仍需代理）
+- **上游自动同步**：每日定时检测上游更新，能安全合并则自动同步并发出带同步说明的 Release；存在冲突时自动开 issue 提醒手动处理
 
 ![Pure Live 界面预览](assets/images/banner.png)
 
@@ -367,7 +375,7 @@ Firebase 不是 Pure Live 使用的必要条件。
 
 ## 📥 下载
 
-前往 [维护分支 GitHub Releases](https://github.com/liuchuancong/pure_live/releases/latest) 获取最新安装包，并使用同一 Release 的 `SHA256SUMS.txt` 校验完整性。
+前往 [维护分支 GitHub Releases](https://github.com/yanxiatao/pure_live/releases/latest) 获取最新安装包，并使用同一 Release 的 `SHA256SUMS.txt` 校验完整性。
 
 ### Android
 
@@ -464,9 +472,9 @@ PowerShell -ExecutionPolicy Bypass -File .\tool\build_local_release.ps1 `
 
 <a href="https://www.star-history.com/?repos=liuchuancong%2Fpure_live&type=date&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=liuchuancong/pure_live&type=date&theme=dark&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=liuchuancong/pure_live&type=date&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=liuchuancong/pure_live&type=date&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=yanxiatao/pure_live&type=date&theme=dark&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=yanxiatao/pure_live&type=date&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=yanxiatao/pure_live&type=date&legend=bottom-right&sealed_token=7TCHJ1imubZUrHskxy4Fj--g2rclGNfNcTikzBHUf3sq9UyOFMIc2Seh8xnBxICxbcuc33QXSM34ooqO-iEpmwbF9JdlGslt_OSSHpPQqMSWBnOYCZoyWOK7vMh0OxfC9TyY_7cFplT_pTHUNrs3RYVg3GZfjqE1ezf5E9fH7_DTDNxxvD5jUlyqDNpT" />
  </picture>
 </a>
 
@@ -477,7 +485,7 @@ PowerShell -ExecutionPolicy Bypass -File .\tool\build_local_release.ps1 `
 如果您觉得本项目对您有帮助，欢迎扫码支持开发者一杯咖啡 ☕
 
 <p align="center">
-  <img src="https://github.com/liuchuancong/pure_live/blob/master/assets/images/wechat.png" width="350" alt="WeChat Donate">
+  <img src="https://github.com/yanxiatao/pure_live/blob/master/assets/images/wechat.png" width="350" alt="WeChat Donate">
 </p>
 
 > 您的支持是我持续维护的动力！感谢 ❤️
