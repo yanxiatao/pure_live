@@ -1,5 +1,7 @@
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/common/global/platform_utils.dart';
+import 'package:pure_live/modules/account/edge_cookie_capture.dart';
 import 'package:pure_live/modules/account/douyin/douyin_cookie_controller.dart';
 
 class DouyinCookiePage extends GetView<DouyinCookieController> {
@@ -51,24 +53,49 @@ class DouyinCookiePage extends GetView<DouyinCookieController> {
                     onSubmitted: controller.setCookie,
                   ),
                   const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: FilledButton.icon(
-                      onPressed: () => controller.setCookie(controller.cookieController.text),
-                      style: FilledButton.styleFrom(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      icon: const Icon(Remix.settings_line, size: 18),
-                      label: Text(
-                        i18n("set"),
-                        style: AppTextStyles.t14.copyWith(
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1,
-                          color: Colors.white,
+                  Row(
+                    children: [
+                      if (PlatformUtils.isWindows) ...[
+                        Expanded(
+                          child: SizedBox(
+                            height: 44,
+                            child: OutlinedButton.icon(
+                              onPressed: () => _autoCaptureCookie(context),
+                              style: OutlinedButton.styleFrom(
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              icon: const Icon(Remix.edge_line, size: 18),
+                              label: Text(
+                                i18n("cookie_auto_capture"),
+                                style: AppTextStyles.t14.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: SizedBox(
+                          width: double.infinity,
+                          height: 44,
+                          child: FilledButton.icon(
+                            onPressed: () => controller.setCookie(controller.cookieController.text),
+                            style: FilledButton.styleFrom(
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            icon: const Icon(Remix.settings_line, size: 18),
+                            label: Text(
+                              i18n("set"),
+                              style: AppTextStyles.t14.copyWith(
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 1,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
                 ],
               ),
@@ -78,6 +105,16 @@ class DouyinCookiePage extends GetView<DouyinCookieController> {
         ],
       ),
     );
+  }
+
+  /// 启动 Edge 自动抓取流程：弹窗展示状态，捕获成功后自动走保存校验链路。
+  Future<void> _autoCaptureCookie(BuildContext context) async {
+    final target = kEdgeCaptureTargets['douyin'];
+    if (target == null) return;
+    final cookie = await EdgeCookieCapture.showCaptureDialog(context, target);
+    if (cookie == null || cookie.isEmpty) return;
+    controller.cookieController.text = cookie;
+    await controller.setCookie(cookie);
   }
 
   Widget _buildTipBanner(ThemeData theme) {
