@@ -1,8 +1,10 @@
 name: Sync upstream and release
 
 # 定时检测上游 liuchuancong/pure_live 的更新：
-# - 能无冲突合并时：自动同步到本仓库 master，并派发 build_pure_live_release.yml 发新 Release；
-# - 存在冲突时：中止合并（master 不受影响），并开 issue 提醒手动处理。
+# - 合并策略：专有功能路径（multiview/Cookie 增强/弹幕代理/Twitch 反代等）
+#   冲突时保留本 fork 侧，其余代码一律以上游为准；
+# - 合并后先过质量门禁（Analyze + multiview 测试），通过才推送并发 Release；
+# - 门禁失败或存在无法自动解决的冲突：重置回远程状态并开 issue 人工处理。
 # 注意：GitHub 会在仓库 60 天无活动后停用定时触发，届时在 Actions 页手动重新启用即可。
 
 on:
@@ -19,6 +21,25 @@ permissions:
 concurrency:
   group: sync-upstream
   cancel-in-progress: false
+
+env:
+  # 专有功能路径：冲突时保留本 fork 侧，不接受上游覆盖。
+  # 维护新增专有功能时同步维护此清单。
+  PROPRIETARY_PATHS: >-
+    lib/modules/multiview
+    lib/modules/account
+    lib/plugins/fjs_engine.dart
+    lib/core/common/web_socket_util.dart
+    lib/core/site/twitch
+    lib/common/services/settings/cookie_settings_controller.dart
+    lib/common/services/settings/proxy_settings_controller.dart
+    lib/player/adapters/media_kit_adapter.dart
+    lib/modules/live_play/controllers/player_controller.dart
+    test/multiview_test.dart
+    .github/workflows/sync-upstream.yml
+    .github/workflows/build_pure_live_release.yml
+    README.md
+    assets/version.json
 
 jobs:
   sync:
@@ -48,22 +69,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge upstream (smart)
+      - name: Merge upstream (proprietary-aware)
         id: merge
         if: steps.check.outputs.count != '0'
         run: |
           if git merge upstream/master --no-edit; then
             echo "merged=clean" >> "$GITHUB_OUTPUT"
           else
-            # 已知安全冲突的自动解法（两层）：
-            # 1. releases.json 是上游发布数据源，冲突时始终以上游为准；
-            # 2. fork 身份文件（README/发布工作流/更新检查数据）携带本 fork
-            #    的仓库 URL 与配置，冲突时始终保留本 fork 侧。
-            # 其余（代码语义冲突）中止合并并开 issue 人工处理。
-            git checkout --theirs assets/releases.json 2>/dev/null || true
-            git add assets/releases.json 2>/dev/null || true
-            git checkout --ours README.md .github/workflows/build_pure_live_release.yml assets/version.json 2>/dev/null || true
-            git add README.md .github/workflows/build_pure_live_release.yml assets/version.json 2>/dev/null || true
+            # 两层冲突解法：
+            # 1. 专有功能路径保留本 fork 侧（不接受上游覆盖）；
+            # 2. 其余冲突全部以上游为准。
+            for p in $PROPRIETARY_PATHS; do
+              git checkout --ours -- "$p" 2>/dev/null || true
+            done
+            git add -A
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              git checkout --theirs -- . 2>/dev/null || true
+              git add -A
+            fi
             if git diff --name-only --diff-filter=U | grep -q .; then
               git merge --abort || true
               git status
@@ -88,13 +111,28 @@ jobs:
             echo "conflict issue already open, skip"
           fi
 
-      - name: Push merged master
+      - name: Setup Flutter
         if: steps.merge.outputs.merged != 'false'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Quality gate (analyze + multiview tests)
+        id: gate
+        if: steps.merge.outputs.merged != 'false'
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test test/multiview_test.dart --concurrency=12
+
+      - name: Push merged master
+        if: steps.gate.outcome == 'success'
         run: git push origin master
 
       - name: Derive release tag from pubspec
         id: tag
-        if: steps.merge.outputs.merged != 'false'
+        if: steps.gate.outcome == 'success'
         run: |
           version=$(grep -Po '(?<=^version: )[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml)
           tag="v$version"
@@ -119,3 +157,17 @@ jobs:
             -f run_quality=true \
             -f release_tag="$RELEASE_TAG" \
             -f release_sync_note="本 Release 由上游自动同步工作流发出，包含同步 [liuchuancong/pure_live](https://github.com/liuchuancong/pure_live) 上游更新的内容。"
+
+      - name: Report gate failure
+        if: failure() || steps.gate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --state open --search "上游同步质量门禁失败 in:title" --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "上游同步质量门禁失败：已回滚本次合并" \
+              --body "自动同步的合并已完成，但质量门禁（Analyze + multiview 测试）未通过，master 未推送。请查看 Actions 运行日志定位失败原因并手动处理。"
+          else
+            echo "gate failure issue already open, skip"
+          fi
