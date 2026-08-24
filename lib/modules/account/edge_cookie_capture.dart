@@ -14,29 +14,24 @@ enum EdgeCaptureState {
   /// 启动 Edge 并等待调试端点就绪。
   launching,
 
-  /// 等待用户在 Edge 中登录（轮询特征 Cookie）。
+  /// 等待用户在 Edge 中登录；登录完成后由用户点击「我已登录完成」触发抓取。
   waitingLogin,
 
   /// 已捕获 Cookie。
   captured,
 
-  /// 失败（找不到 Edge/启动失败/超时）。
+  /// 失败（找不到 Edge/启动失败）。
   failed,
 
   /// 用户取消。
   cancelled,
 }
 
-/// 平台抓取配置：登录页地址、Cookie 域名与登录态特征 Cookie。
+/// 平台抓取配置：登录页地址与 Cookie 归属域名。
 class EdgeCaptureTarget {
-  const EdgeCaptureTarget({
-    required this.platform,
-    required this.loginUrl,
-    required this.domains,
-    this.characteristicCookies = const [],
-  });
+  const EdgeCaptureTarget({required this.platform, required this.loginUrl, required this.domains});
 
-  /// 平台标识（与账户模块一致），用于捕获后经平台接口校验登录态。
+  /// 平台标识（与账户模块一致），用于抓取后经平台接口校验登录态。
   final String platform;
 
   /// 打开的登录页/站点地址。
@@ -44,30 +39,15 @@ class EdgeCaptureTarget {
 
   /// Cookie 归属域名（后缀匹配，如 'twitch.tv' 匹配 '.twitch.tv'）。
   final List<String> domains;
-
-  /// 登录态特征 Cookie 名；全部出现时触发登录态校验。
-  /// 注意：特征 Cookie 出现不代表登录已完成（如 Twitch 两步验证期间
-  /// 会先下发未激活的 auth-token），需校验通过才收口。
-  final List<String> characteristicCookies;
 }
 
 /// 各平台抓取配置（key 与账户模块的平台标识一致）。
 const Map<String, EdgeCaptureTarget> kEdgeCaptureTargets = {
-  'douyin': EdgeCaptureTarget(
-    platform: 'douyin',
-    loginUrl: 'https://www.douyin.com/',
-    domains: ['douyin.com'],
-    characteristicCookies: ['sessionid_ss', 'sid_tt'],
-  ),
+  'douyin': EdgeCaptureTarget(platform: 'douyin', loginUrl: 'https://www.douyin.com/', domains: ['douyin.com']),
   'huya': EdgeCaptureTarget(platform: 'huya', loginUrl: 'https://www.huya.com/', domains: ['huya.com']),
   'kuaishou': EdgeCaptureTarget(platform: 'kuaishou', loginUrl: 'https://www.kuaishou.com/', domains: ['kuaishou.com']),
   'soop': EdgeCaptureTarget(platform: 'soop', loginUrl: 'https://www.sooplive.co.kr/', domains: ['sooplive.co.kr']),
-  'twitch': EdgeCaptureTarget(
-    platform: 'twitch',
-    loginUrl: 'https://www.twitch.tv/login',
-    domains: ['twitch.tv'],
-    characteristicCookies: ['auth-token'],
-  ),
+  'twitch': EdgeCaptureTarget(platform: 'twitch', loginUrl: 'https://www.twitch.tv/login', domains: ['twitch.tv']),
 };
 
 /// 通过 Edge CDP（Chrome DevTools Protocol）抓取站点 Cookie。
@@ -78,10 +58,12 @@ const Map<String, EdgeCaptureTarget> kEdgeCaptureTargets = {
 ///    （Chromium 136+ 在默认 profile 下忽略调试端口参数，临时目录是
 ///    必选项，同时避免读取用户默认配置文件的隐私问题）；
 /// 3. 启动 Edge 打开平台登录页，轮询 /json/version 等待调试端点就绪；
-/// 4. 周期经 CDP `Storage.getCookies` 抓取 Cookie：特征 Cookie 齐全时
-///    自动完成，用户也可点「我已登录完成」手动收口；
-/// 5. 按域名过滤组装 `name=value; ...` 字符串返回。
+/// 4. 等待用户在 Edge 中完成登录，点击「我已登录完成」后**单次**抓取：
+///    经 CDP `Storage.getCookies` 按域名过滤组装 `name=value; ...` 返回，
+///    并经平台接口校验登录态（无效则提示后保持等待，可再次点击）。
 ///
+/// 不做任何自动轮询：Storage.getCookies 需序列化全浏览器 Cookie，
+/// 周期调用会与登录页加载争抢 Cookie 后端导致页面卡顿（实测）。
 /// 使用独立临时 profile 意味着用户需要在打开的 Edge 里重新登录一次；
 /// 抓取完成后该临时实例会被关闭并清理。
 class EdgeCookieCapture {
@@ -92,34 +74,43 @@ class EdgeCookieCapture {
   final StreamController<EdgeCaptureState> _stateController = StreamController<EdgeCaptureState>.broadcast();
   Stream<EdgeCaptureState> get stateStream => _stateController.stream;
 
+  /// 抓取过程的用户提示（如「未捕获到 Cookie」「Cookie 无效」），
+  /// 由对话框展示；空消息不发射。
+  final StreamController<String> _hintController = StreamController<String>.broadcast();
+  Stream<String> get hintStream => _hintController.stream;
+
   final StreamController<String> _logController = StreamController<String>.broadcast();
   Stream<String> get logStream => _logController.stream;
 
   Process? _edgeProcess;
   WebSocket? _cdpSocket;
-  Timer? _pollTimer;
-  Timer? _timeoutTimer;
-  bool _manualComplete = false;
+  int? _cdpPort;
   bool _finished = false;
-  String? _lastCookie;
+  bool _captureInFlight = false;
+  String? _resultCookie;
   int _cdpRequestId = 0;
   final Map<int, Completer<Map<String, dynamic>?>> _pendingCdp = <int, Completer<Map<String, dynamic>?>>{};
 
-  /// 执行抓取；返回组装好的 Cookie 字符串，取消/失败/超时返回 null。
-  Future<String?> capture() async {
+  /// 抓取结果：成功收口时为组装好的 Cookie 字符串；取消/失败为 null。
+  /// 对话框关闭后由调用方读取。
+  String? get resultCookie => _resultCookie;
+
+  /// 执行启动流程；之后由用户点击「我已登录完成」触发 [completeManually]
+  /// 单次抓取。取消/失败返回 null。
+  Future<void> start() async {
     _emit(EdgeCaptureState.locating);
     final edgePath = await _locateEdge();
     if (edgePath == null) {
       _log('msedge.exe not found');
       _finish(null, EdgeCaptureState.failed);
-      return null;
+      return;
     }
 
     final port = await _pickFreePort();
     if (port == null) {
       _log('no free port');
       _finish(null, EdgeCaptureState.failed);
-      return null;
+      return;
     }
 
     final profileDir = '${Directory.systemTemp.path}/purelive-cdp-$port';
@@ -139,47 +130,29 @@ class EdgeCookieCapture {
     } catch (error) {
       _log('launch failed: $error');
       _finish(null, EdgeCaptureState.failed);
-      return null;
+      return;
     }
 
-    // 等待调试端点就绪（Edge 冷启动需数秒）。
+    // 等待调试端点就绪（Edge 冷启动需数秒），随后进入等待登录阶段。
     final ready = await _waitForDebugEndpoint(port, const Duration(seconds: 30));
     if (!ready) {
       _log('debug endpoint not ready in time');
       _cleanup(port);
       _finish(null, EdgeCaptureState.failed);
-      return null;
+      return;
     }
 
-    _emit(EdgeCaptureState.waitingLogin);
+    // 等待调试端点就绪（Edge 冷启动需数秒），随后连接浏览器级 CDP WebSocket
+    // （「我已登录完成」的单次抓取经此通道），进入等待登录阶段。
+    _cdpPort = port;
 
-    // 总超时兜底：5 分钟未完成视为放弃。
-    _timeoutTimer = Timer(const Duration(minutes: 5), () => _finish(_lastCookie, EdgeCaptureState.failed));
-
-    final cookie = await _pollLoop(port);
-    _cleanup(port);
-    return cookie;
-  }
-
-  /// 用户确认登录完成：立即用当前已抓到的 Cookie 收口。
-  void completeManually() {
-    _manualComplete = true;
-  }
-
-  /// 取消抓取并清理。
-  void cancel() {
-    _manualComplete = false;
-    _finish(null, EdgeCaptureState.cancelled);
-  }
-
-  Future<String?> _pollLoop(int port) async {
-    // 连接浏览器级 CDP WebSocket。
     final wsUrl = await _fetchBrowserWsUrl(port);
     if (wsUrl == null) {
       _log('browser ws url unavailable');
-      return _lastCookie;
+      _cleanup(port);
+      _finish(null, EdgeCaptureState.failed);
+      return;
     }
-
     final socket = await WebSocket.connect(wsUrl);
     _cdpSocket = socket;
     socket.listen((data) {
@@ -191,54 +164,49 @@ class EdgeCookieCapture {
       }
     });
 
-    // 登录态校验节流：特征 Cookie 出现后每 5 秒最多校验一次，
-    // 避免两步验证窗口期内高频请求平台接口。
-    DateTime? lastValidationAt;
+    _emit(EdgeCaptureState.waitingLogin);
+  }
 
-    // 首次抓取延迟：登录页加载期 Cookie 写入高频，立即查询 Storage.getCookies
-    // 会与页面争抢 Cookie 后端导致页面卡顿；等页面加载稳定后再开始轮询。
-    // 期间点击「我已登录完成」会在首次抓取后立即生效。
-    await Future<void>.delayed(const Duration(seconds: 10));
-    if (_finished) return _lastCookie;
-
-    while (!_finished) {
-      final cookies = await _fetchCookiesViaCdp(socket);
-      if (cookies != null) {
-        _lastCookie = _assembleCookieString(cookies);
-        final autoDetected = _hasCharacteristicCookies(cookies);
-        if ((autoDetected || _manualComplete) && _lastCookie != null) {
-          // 特征 Cookie 出现不代表登录态已生效：如 Twitch 两步验证期间会先
-          // 下发未激活的 auth-token，此时收口会得到无效 Cookie 并关掉仍在
-          // 验证流程中的浏览器。因此经平台接口校验通过才收口；校验不通过
-          // 则保持 Edge 打开，等待用户完成后续验证步骤。
-          final now = DateTime.now();
-          final shouldValidate =
-              _manualComplete || lastValidationAt == null || now.difference(lastValidationAt).inSeconds >= 5;
-          if (shouldValidate) {
-            lastValidationAt = now;
-            final validation = await CookieValidator.validate(target.platform, _lastCookie!);
-            // valid：登录态确认生效；unverified：平台无校验端点，特征即真相。
-            // 其余（invalid/error）保持 Edge 打开等待用户完成验证或网络恢复。
-            if (validation == CookieValidationStatus.valid || validation == CookieValidationStatus.unverified) {
-              _finish(_lastCookie, EdgeCaptureState.captured);
-              return _lastCookie;
-            }
-            if (_manualComplete) {
-              // 用户手动断言完成：尊重操作交出结果（保存链路的校验仍会拦截无效值并提示）。
-              _finish(_lastCookie, EdgeCaptureState.captured);
-              return _lastCookie;
-            }
-            // 自动检测但校验未过：继续轮询等待用户完成验证。
-          }
-        }
-      }
-      // Edge 进程退出（用户关窗）且未手动完成 → 结束。
-      if (_edgeProcess == null) break;
-      // 4 秒间隔：Storage.getCookies 需序列化全浏览器 Cookie，高频轮询会与
-      // 页面加载争抢 Cookie 后端造成卡顿（实测打开登录页即卡死的根因）。
-      await Future<void>.delayed(const Duration(seconds: 4));
+  /// 用户点击「我已登录完成」：单次抓取 Cookie 并校验登录态。
+  ///
+  /// 有效（或平台无校验端点）→ 收口返回；无效 → 提示后保持等待，
+  /// 用户可确认登录完成后再次点击；未捕获到 Cookie 同样提示并保持等待。
+  Future<void> completeManually() async {
+    if (_finished || _captureInFlight) return;
+    final socket = _cdpSocket;
+    final port = _cdpPort;
+    if (socket == null || port == null) {
+      _hint(i18n('cookie_capture_not_ready'));
+      return;
     }
-    return _lastCookie;
+
+    _captureInFlight = true;
+    try {
+      final cookies = await _fetchCookiesViaCdp(socket);
+      final cookie = cookies != null ? _assembleCookieString(cookies) : null;
+      if (cookie == null) {
+        _hint(i18n('cookie_capture_empty_hint'));
+        return;
+      }
+
+      final validation = await CookieValidator.validate(target.platform, cookie);
+      switch (validation) {
+        case CookieValidationStatus.valid || CookieValidationStatus.unverified:
+          _finish(cookie, EdgeCaptureState.captured);
+        case CookieValidationStatus.invalid:
+          // 无效：提示后保持弹层等待，用户可确认登录完成后再次点击。
+          _hint(i18n('cookie_invalid_retry'));
+        case CookieValidationStatus.error:
+          _hint(i18n('cookie_check_failed'));
+      }
+    } finally {
+      _captureInFlight = false;
+    }
+  }
+
+  /// 取消抓取并清理。
+  void cancel() {
+    _finish(null, EdgeCaptureState.cancelled);
   }
 
   Future<List<Map<String, dynamic>>?> _fetchCookiesViaCdp(WebSocket socket) async {
@@ -255,7 +223,7 @@ class EdgeCookieCapture {
     final completer = Completer<Map<String, dynamic>?>();
     _pendingCdp[id] = completer;
     socket.add(jsonEncode({'id': id, 'method': method}));
-    // 单次命令超时兜底，避免 WS 半死状态卡死轮询。
+    // 单次命令超时兜底，避免 WS 半死状态卡死交互。
     return completer.future.timeout(
       const Duration(seconds: 8),
       onTimeout: () {
@@ -282,12 +250,6 @@ class EdgeCookieCapture {
   bool _domainMatches(Map<String, dynamic> cookie) {
     final domain = cookie['domain']?.toString() ?? '';
     return target.domains.any((d) => domain == d || domain == '.$d' || domain.endsWith('.$d') || domain == '.$d');
-  }
-
-  bool _hasCharacteristicCookies(List<Map<String, dynamic>> cookies) {
-    if (target.characteristicCookies.isEmpty) return false;
-    final names = cookies.where(_domainMatches).map((c) => c['name']?.toString()).toSet();
-    return target.characteristicCookies.every(names.contains);
   }
 
   /// 轮询 /json/version 直到调试端点就绪或超时。
@@ -341,21 +303,26 @@ class EdgeCookieCapture {
     if (!_logController.isClosed) _logController.add(message);
   }
 
+  void _hint(String message) {
+    if (!_hintController.isClosed) _hintController.add(message);
+  }
+
   void _finish(String? cookie, EdgeCaptureState state) {
     if (_finished) return;
     _finished = true;
-    _timeoutTimer?.cancel();
-    _pollTimer?.cancel();
+    _resultCookie = cookie;
     try {
       _cdpSocket?.close();
     } catch (_) {}
     _cdpSocket = null;
+    _cdpPort = null;
     try {
       _edgeProcess?.kill();
     } catch (_) {}
     _edgeProcess = null;
     _emit(cookie != null ? EdgeCaptureState.captured : state);
     if (!_stateController.isClosed) _stateController.close();
+    if (!_hintController.isClosed) _hintController.close();
     if (!_logController.isClosed) _logController.close();
   }
 
@@ -403,8 +370,8 @@ class EdgeCookieCapture {
 
   /// 弹出抓取对话框并等待完成；返回捕获的 Cookie（取消/失败返回 null）。
   ///
-  /// 对话框实时展示抓取状态，并提供「我已登录完成」（手动收口）与
-  /// 「取消」按钮；抓取结束（捕获/失败/取消）自动关闭。
+  /// 对话框实时展示抓取状态与提示，并提供「我已登录完成」（单次抓取）
+  /// 与「取消」按钮；抓取结束（捕获/失败/取消）自动关闭。
   static Future<String?> showCaptureDialog(BuildContext context, EdgeCaptureTarget target) async {
     final capture = EdgeCookieCapture(target: target);
     var dialogOpen = true;
@@ -424,52 +391,52 @@ class EdgeCookieCapture {
       }
     });
 
-    final captureFuture = capture.capture();
-    unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => PopScope(
-          canPop: false,
-          child: AlertDialog(
-            title: Text(i18n('cookie_capture_title')),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                StreamBuilder<EdgeCaptureState>(
-                  stream: capture.stateStream,
-                  initialData: EdgeCaptureState.locating,
-                  builder: (context, snapshot) {
-                    final state = snapshot.data ?? EdgeCaptureState.locating;
-                    return Text(_captureStateText(state), style: AppTextStyles.t14);
-                  },
-                ),
-                const SizedBox(height: 8),
-                StreamBuilder<EdgeCaptureState>(
-                  stream: capture.stateStream,
-                  initialData: EdgeCaptureState.locating,
-                  builder: (context, snapshot) {
-                    final state = snapshot.data ?? EdgeCaptureState.locating;
-                    if (state != EdgeCaptureState.waitingLogin) return const SizedBox.shrink();
-                    return Text(i18n('cookie_capture_waiting_hint'), style: AppTextStyles.t12);
-                  },
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(onPressed: capture.completeManually, child: Text(i18n('cookie_capture_done_button'))),
-              TextButton(onPressed: capture.cancel, child: Text(i18n('cancel'))),
+    unawaited(capture.start());
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text(i18n('cookie_capture_title')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              StreamBuilder<EdgeCaptureState>(
+                stream: capture.stateStream,
+                initialData: EdgeCaptureState.locating,
+                builder: (context, snapshot) {
+                  final state = snapshot.data ?? EdgeCaptureState.locating;
+                  return Text(_captureStateText(state), style: AppTextStyles.t14);
+                },
+              ),
+              const SizedBox(height: 8),
+              StreamBuilder<String>(
+                stream: capture.hintStream,
+                builder: (context, snapshot) {
+                  final hint = snapshot.data;
+                  if (hint == null || hint.isEmpty) return const SizedBox.shrink();
+                  return Text(hint, style: AppTextStyles.t12);
+                },
+              ),
             ],
           ),
+          actions: [
+            TextButton(
+              onPressed: () => unawaited(capture.completeManually()),
+              child: Text(i18n('cookie_capture_done_button')),
+            ),
+            TextButton(onPressed: capture.cancel, child: Text(i18n('cancel'))),
+          ],
         ),
       ),
     );
 
-    final cookie = await captureFuture;
     stateSub.cancel();
     closeDialog();
-    return cookie;
+    return capture.resultCookie;
   }
 
   static String _captureStateText(EdgeCaptureState state) {
