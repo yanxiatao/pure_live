@@ -630,7 +630,6 @@ class LivePlayController extends GetxController
         roomId: roomId,
         platform: state.value.room.detail!.platform!,
       );
-
       var liveRoom = fetchedRoom.withAudienceFallbackFrom(state.value.room.detail!);
       liveRoom = liveRoom.fillFromDetail(state.value.room.detail);
 
@@ -852,11 +851,15 @@ class LivePlayController extends GetxController
         webUrl = "https://cc.163.com/${detail.roomId}";
         break;
       case Sites.twitchSite:
-        nativeUrl = "https://www.twitch.tv/${detail.roomId}";
+        nativeUrl = "twitch://player/live?broad_no=${detail.userId}&user_id=${detail.roomId}&channel=";
         webUrl = "https://www.twitch.tv/${detail.roomId}";
         break;
       case Sites.soopSite:
-        nativeUrl = "https://play.sooplive.co.kr/${detail.roomId}";
+        nativeUrl = "sooplive://player/live?broad_no=${detail.userId}&user_id=${detail.roomId}&channel=";
+        webUrl = "https://play.sooplive.co.kr/${detail.roomId}";
+        break;
+      case Sites.yySite:
+        nativeUrl = "https://www.yy.com/${detail.roomId}";
         webUrl = nativeUrl;
         break;
       case Sites.kuaishouSite:
