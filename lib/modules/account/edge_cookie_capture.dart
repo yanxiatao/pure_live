@@ -195,6 +195,12 @@ class EdgeCookieCapture {
     // 避免两步验证窗口期内高频请求平台接口。
     DateTime? lastValidationAt;
 
+    // 首次抓取延迟：登录页加载期 Cookie 写入高频，立即查询 Storage.getCookies
+    // 会与页面争抢 Cookie 后端导致页面卡顿；等页面加载稳定后再开始轮询。
+    // 期间点击「我已登录完成」会在首次抓取后立即生效。
+    await Future<void>.delayed(const Duration(seconds: 10));
+    if (_finished) return _lastCookie;
+
     while (!_finished) {
       final cookies = await _fetchCookiesViaCdp(socket);
       if (cookies != null) {
@@ -228,7 +234,9 @@ class EdgeCookieCapture {
       }
       // Edge 进程退出（用户关窗）且未手动完成 → 结束。
       if (_edgeProcess == null) break;
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      // 4 秒间隔：Storage.getCookies 需序列化全浏览器 Cookie，高频轮询会与
+      // 页面加载争抢 Cookie 后端造成卡顿（实测打开登录页即卡死的根因）。
+      await Future<void>.delayed(const Duration(seconds: 4));
     }
     return _lastCookie;
   }
