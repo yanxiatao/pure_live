@@ -57,14 +57,20 @@ class CookieValidator {
     }
   }
 
-  /// Twitch：gql 携带 Cookie 查询当前用户，返回非空 currentUser 即登录有效。
-  /// Client-ID 为 Twitch 网页端公开客户端标识。
+  /// Twitch：gql 查询当前用户。登录态由 `Authorization: OAuth <auth-token>`
+  /// 头承载（网页端从 auth-token Cookie 取值），仅靠 Cookie 头不会被视为
+  /// 已登录；Client-ID 为 Twitch 网页端公开客户端标识。
   static Future<CookieValidationStatus> _validateTwitch(String cookie) async {
     try {
+      final authToken = _extractCookieValue(cookie, 'auth-token');
       final result = await HttpClient.instance.postJson(
         'https://gql.twitch.tv/gql',
         data: {'query': '{ currentUser { id login } }'},
-        header: {'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Cookie': cookie},
+        header: {
+          'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+          'Cookie': cookie,
+          if (authToken != null) 'Authorization': 'OAuth $authToken',
+        },
       );
       final data = result is Map ? result['data'] : null;
       final user = data is Map ? data['currentUser'] : null;
@@ -72,5 +78,16 @@ class CookieValidator {
     } catch (_) {
       return CookieValidationStatus.error;
     }
+  }
+
+  /// 从 Cookie 串提取指定名的值；不存在返回 null。
+  static String? _extractCookieValue(String cookie, String name) {
+    for (final part in cookie.split('; ')) {
+      final idx = part.indexOf('=');
+      if (idx > 0 && part.substring(0, idx) == name) {
+        return part.substring(idx + 1);
+      }
+    }
+    return null;
   }
 }
