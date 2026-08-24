@@ -16,6 +16,7 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
   late final TextEditingController _appPortController;
   late final TextEditingController _playerHostController;
   late final TextEditingController _playerPortController;
+  late final TextEditingController _twitchProxiesController;
 
   @override
   void initState() {
@@ -24,6 +25,7 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
     _appPortController = TextEditingController(text: proxyCtrl.appProxyPort.v.toString());
     _playerHostController = TextEditingController(text: proxyCtrl.proxyHost.v);
     _playerPortController = TextEditingController(text: proxyCtrl.proxyPort.v.toString());
+    _twitchProxiesController = TextEditingController(text: proxyCtrl.twitchProxyPlaylists.v);
   }
 
   @override
@@ -32,6 +34,7 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
     _appPortController.dispose();
     _playerHostController.dispose();
     _playerPortController.dispose();
+    _twitchProxiesController.dispose();
     super.dispose();
   }
 
@@ -149,6 +152,31 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
                   ),
                 ),
               ],
+            ]),
+            const SizedBox(height: 24),
+            context.buildGroupTitle(i18n("twitch_proxy_group_title")),
+            context.buildModernCard([
+              SwitchListTile(
+                secondary: Icon(Remix.twitch_line, color: theme.colorScheme.primary),
+                title: Text(i18n("enable_twitch_proxy")),
+                subtitle: Text(i18n("enable_twitch_proxy_desc")),
+                value: proxyCtrl.enableTwitchProxy.v,
+                onChanged: (val) => proxyCtrl.enableTwitchProxy.v = val,
+              ),
+              if (proxyCtrl.enableTwitchProxy.v)
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: TextField(
+                    controller: _twitchProxiesController,
+                    decoration: InputDecoration(
+                      labelText: i18n("twitch_proxy_playlists_label"),
+                      hintText: "api.ttv.lol,eu.luminous.dev",
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (val) => proxyCtrl.twitchProxyPlaylists.v = val.trim(),
+                  ),
+                ),
             ]),
             const SizedBox(height: 32),
           ],

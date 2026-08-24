@@ -203,6 +203,14 @@ class TwitchSite implements LiveSite, LiveSiteRoomRefresher {
     List<LivePlayQuality> qualities = <LivePlayQuality>[];
     if (detail.status != true) return qualities;
 
+    // 免代理播放：经 TTV LOL 类公开反代获取播放列表（服务端代取
+    // PlaybackAccessToken 与 usher playlist），客户端只访问反代域名；
+    // 播放流传输域名（ttvnw.net）实测可直连。多反代依序 failover，
+    // 全部失败抛错（不回退被阻断的直连，避免长时间挂起）。
+    if (SettingsService.to.proxy.enableTwitchProxy.v) {
+      return await _getPlayQualitesViaProxy(detail);
+    }
+
     var liveGpl = buildPersistedRequest(
       "PlaybackAccessToken",
       "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
@@ -242,7 +250,41 @@ class TwitchSite implements LiveSite, LiveSiteRoomRefresher {
     };
     var m3u8Url = "https://usher.ttvnw.net/api/channel/hls/${detail.roomId}.m3u8";
     var content = await HttpClient.instance.getText(m3u8Url, queryParameters: params, header: headers);
+    return _parseM3u8Qualities(content);
+  }
 
+  /// 免代理播放：经 TTV LOL 类公开反代获取播放列表（服务端代取
+  /// PlaybackAccessToken 与 usher playlist），客户端只访问反代域名。
+  /// 多反代依序 failover，全部失败抛错（不回退被阻断的直连）。
+  Future<List<LivePlayQuality>> _getPlayQualitesViaProxy(LiveRoom detail) async {
+    final proxies = SettingsService.to.proxy.twitchProxyPlaylists.v
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (proxies.isEmpty) {
+      throw StateError('Twitch proxy playlists is empty');
+    }
+
+    Object? lastError;
+    for (final proxy in proxies) {
+      try {
+        final url =
+            'https://$proxy/playlist/${detail.roomId}.m3u8?allow_source=true&support_bttv=true&support_ffz=true';
+        final content = await HttpClient.instance.getText(url);
+        final qualities = _parseM3u8Qualities(content);
+        if (qualities.isNotEmpty) return qualities;
+      } catch (e) {
+        lastError = e;
+        CoreLog.error(e);
+      }
+    }
+    throw StateError('All Twitch playlist proxies failed: $lastError');
+  }
+
+  /// 解析 master m3u8：提取各档位 URL 与带宽，按带宽降序生成清晰度列表。
+  List<LivePlayQuality> _parseM3u8Qualities(String content) {
+    var qualities = <LivePlayQuality>[];
     _playUrlList.clear();
     final lines = content.split("\n");
     for (var i in lines) {

@@ -10,6 +10,15 @@ class ProxySettingsController extends GetxController {
   final RxBool enableAppProxy = hiveBool('enableAppProxy', false);
   final RxString appProxyHost = hiveString('appProxyHost', '');
   final RxInt appProxyPort = hiveInt('appProxyPort', 7897);
+
+  // Twitch 免代理播放：经 TTV LOL 类公开反代获取播放列表（实验性）。
+  // 反代地址逗号分隔，按序 failover；播放流传输域名（ttvnw.net）可直连。
+  final RxBool enableTwitchProxy = hiveBool('enableTwitchProxy', false);
+  final RxString twitchProxyPlaylists = hiveString(
+    'twitchProxyPlaylists',
+    'api.ttv.lol,eu.luminous.dev,lb-eu.cdn-perfprod.com',
+  );
+
   @override
   void onInit() {
     super.onInit();
@@ -33,6 +42,8 @@ class ProxySettingsController extends GetxController {
       'enableAppProxy': enableAppProxy.v,
       'appProxyHost': appProxyHost.v,
       'appProxyPort': appProxyPort.v,
+      'enableTwitchProxy': enableTwitchProxy.v,
+      'twitchProxyPlaylists': twitchProxyPlaylists.v,
     };
   }
 
@@ -43,6 +54,8 @@ class ProxySettingsController extends GetxController {
     enableAppProxy.v = json['enableAppProxy'] ?? false;
     appProxyHost.v = json['appProxyHost'] ?? '';
     appProxyPort.v = json['appProxyPort'] ?? 1080;
+    enableTwitchProxy.v = json['enableTwitchProxy'] ?? false;
+    twitchProxyPlaylists.v = json['twitchProxyPlaylists'] ?? 'api.ttv.lol,eu.luminous.dev,lb-eu.cdn-perfprod.com';
   }
 
   static Map<String, dynamic> extractConfig(Map<String, dynamic>? rootConfig) {
@@ -54,6 +67,8 @@ class ProxySettingsController extends GetxController {
       'enableAppProxy': proxy['enableAppProxy'] ?? false,
       'appProxyHost': proxy['appProxyHost'] ?? '',
       'appProxyPort': proxy['appProxyPort'] ?? 7897,
+      'enableTwitchProxy': proxy['enableTwitchProxy'] ?? false,
+      'twitchProxyPlaylists': proxy['twitchProxyPlaylists'] ?? 'api.ttv.lol,eu.luminous.dev,lb-eu.cdn-perfprod.com',
     };
   }
 
