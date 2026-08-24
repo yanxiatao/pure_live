@@ -1,7 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/plugins/utils.dart';
+import 'package:pure_live/plugins/update.dart';
 import 'package:markdown_widget/widget/all.dart';
 import 'package:pure_live/plugins/race_http.dart';
 import 'package:markdown_widget/config/configs.dart';
@@ -43,9 +46,9 @@ class _VersionHistoryPageState extends State<VersionHistoryPage> with SingleTick
     if (allReleased.isNotEmpty && !forceRefresh) return;
     if (historyLoading.value) return;
     try {
-      final mirror = GitHubMirror(owner: 'liuchuancong', repo: 'pure_live', branch: 'master');
       historyLoading.value = true;
       historyError.value = false;
+      final mirror = GitHubMirror(owner: 'liuchuancong', repo: 'pure_live', branch: 'master');
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final sourceUrls = SettingsService.to.app.useGitHubOriginForUpdates.v
           ? [mirror.rawUrl('assets/releases.json')]
@@ -58,19 +61,23 @@ class _VersionHistoryPageState extends State<VersionHistoryPage> with SingleTick
       final result = await HttpClient.instance.getJson(
         url,
         header: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.51',
-          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+          'Accept': 'application/json,text/plain,*/*',
         },
       );
       final decoded = result is String ? json.decode(result) : result;
-      if (decoded is! Map<String, dynamic>) {
+      final List<dynamic> releases;
+      if (decoded is List) {
+        releases = decoded;
+      } else if (decoded is Map && decoded['releases'] is List) {
+        releases = decoded['releases'] as List;
+      } else {
         throw const FormatException('版本历史数据格式错误');
       }
-      final releases = decoded['releases'];
-      if (releases is! List) {
-        throw const FormatException('版本历史数据缺少 releases');
-      }
-      final releaseList = releases.map((e) => ReleaseModel.fromJson(e)).toList();
+      final releaseList = releases
+          .whereType<Map>()
+          .map((e) => ReleaseModel.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
       releaseList.sort((a, b) => b.date.compareTo(a.date));
       allReleased.value = releaseList;
     } catch (e) {
@@ -285,17 +292,19 @@ class _VersionHistoryPageState extends State<VersionHistoryPage> with SingleTick
     Get.dialog(
       Dialog(
         clipBehavior: Clip.antiAlias,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         backgroundColor: theme.colorScheme.surfaceContainerHigh,
         child: Container(
-          padding: const EdgeInsets.all(24),
-          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 520),
+          width: double.infinity,
+          padding: const EdgeInsets.all(15),
+          constraints: BoxConstraints(maxWidth: Get.width * .95, maxHeight: 520),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _VersionAuthorHeaderWidget(item: item),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               Expanded(
                 child: Container(
                   width: double.infinity,
@@ -306,7 +315,6 @@ class _VersionHistoryPageState extends State<VersionHistoryPage> with SingleTick
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -405,7 +413,7 @@ class _VersionAuthorHeaderWidget extends StatelessWidget {
             backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
           ),
           onPressed: () => launchUrlString(item.github),
-          icon: const Icon(Remix.github_fill, size: 16),
+          icon: const Icon(Remix.link, size: 16),
         ),
       ],
     );
@@ -474,7 +482,7 @@ class _VersionChangelogAndFilesWidget extends StatelessWidget {
                           children: [
                             Text(
                               file.name,
-                              maxLines: 1,
+                              maxLines: 3,
                               overflow: TextOverflow.ellipsis,
                               style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                             ),
@@ -497,7 +505,24 @@ class _VersionChangelogAndFilesWidget extends StatelessWidget {
                           backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.08),
                           foregroundColor: theme.colorScheme.primary,
                         ),
-                        onPressed: () => launchUrlString(file.url),
+                        onPressed: () async {
+                          Clipboard.setData(ClipboardData(text: file.url));
+                          ToastUtil.show(i18n("copied_to_clipboard"));
+                        },
+                        icon: const Icon(Remix.file_copy_2_fill, size: 16),
+                      ),
+                      SizedBox(width: 6),
+                      IconButton(
+                        style: IconButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+                          foregroundColor: theme.colorScheme.primary,
+                        ),
+                        onPressed: () async {
+                          bool? result = await Utils.showAlertDialog(i18n('open_download_confirm'), title: i18n('tip'));
+                          if (result) {
+                            downloadAndInstallApk(file.url, fileName: file.name);
+                          }
+                        },
                         icon: const Icon(Remix.download_2_line, size: 16),
                       ),
                     ],

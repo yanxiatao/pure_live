@@ -141,6 +141,7 @@
     "downloading_apk": "正在下载 纯粹直播v{version}...",
     "downloading_progress": "正在下载 v{version}... {progress}%",
     "downloading_version": "正在下载 v{version}...",
+    "downloading_app": "正在下载 {app}...",
     "effective_after_restart": "重启后生效",
     "email": "邮件",
     "empty_areas_room_subtitle": "下滑/上滑刷新数据",
@@ -499,7 +500,7 @@
     "site_douyin": "抖音",
     "site_douyu": "斗鱼",
     "site_huya": "虎牙",
-     "site_yy": "YY",
+    "site_yy": "YY",
     "site_iptv": "网络",
     "site_kuaishou": "快手",
     "sleep_timer": "定时关闭",
@@ -558,7 +559,7 @@
     "toolbox_room_jump": "直播间跳转",
     "toolbox_select_line": "选择线路",
     "toolbox_select_quality": "选择清晰度",
-    "toolbox_support_content": "支持以下类型的链接解析：\n\n哔哩哔哩：\nhttps://live.bilibili.com/xxxxx\nhttps://www.bilibili.com/xxxxx\nhttps://b23.tv/xxxxx\n\n虎牙直播：\nhttps://www.huya.com/xxxxx\n\n斗鱼直播：\nhttps://www.douyu.com/xxxxx\n\n抖音直播/视频：\nhttps://live.douyin.com/xxxxx\nhttps://www.douyin.com/xxxxx\nhttps://v.douyin.com/xxxxx\nhttps://webcast.amemv.com/douyin/webcast/reflow/xxxxx\n\n快手直播：\nhttps://live.kuaishou.com/u/xxxxx\nhttps://live.kuaishou.cn/u/xxxxx\n\n网易CC直播：\nhttps://cc.163.com/xxxxx",
+    "toolbox_support_content": "支持以下类型的链接解析：\n\n哔哩哔哩：\nhttps://live.bilibili.com/xxxxx\nhttps://www.bilibili.com/xxxxx\nhttps://b23.tv/xxxxx\n\n虎牙直播：\nhttps://www.huya.com/xxxxx\n\n斗鱼直播：\nhttps://www.douyu.com/xxxxx\n\n抖音直播/视频：\nhttps://live.douyin.com/xxxxx\nhttps://www.douyin.com/xxxxx\nhttps://v.douyin.com/xxxxx\nhttps://webcast.amemv.com/douyin/webcast/reflow/xxxxx\n\n快手直播：\nhttps://live.kuaishou.com/u/xxxxx\nhttps://live.kuaishou.cn/u/xxxxx\n\n网易CC直播：\nhttps://cc.163.com/xxxxx\n\nTwitch直播：\nhttps://www.twitch.tv/xxxxx\nhttps://twitch.tv/xxxxx\n\nSOOP直播：\nhttps://www.sooplive.com/xxxxx\nhttps://sooplive.com/xxxxx\nhttps://play.sooplive.com/xxxxx\nhttps://www.sooplive.co.kr/xxxxx\nhttps://sooplive.co.kr/xxxxx\nhttps://play.sooplive.co.kr/xxxxx\n\nYY直播：\nhttps://www.yy.com/xxxxx\nhttps://yy.com/xxxxx",
     "toolbox_support_list": "支持解析列表",
     "toolbox_title": "链接解析",
     "tray_update_failed": "系统托盘更新失败",
@@ -789,6 +790,7 @@
     "search_coverage_local": "{site} 搜索本机已导入的频道，不参与网络主播搜索。",
     "search_coverage_web_only": "{site} 当前使用网页搜索入口，点上方“继续网页搜索”打开。",
     "search_web_only_platform": "{site} 当前使用网页搜索入口。",
+    "search_web_unavailable": "{site} 仅搜索本机内容，没有网页搜索入口。",
     "continue_web_search": "继续网页搜索",
     "select_platform_for_web_search": "请先选择一个平台",
     "search_partial_failure": "部分平台请求失败：{sites}",
@@ -1383,5 +1385,7 @@
     "multiview_line": "线路 {index}",
     "multiview_volume": "音量",
     "cookie_hint": "粘贴 {name} Cookie",
-    "cookie_tip": "登录 {name} 网页并进入任意直播间，在浏览器开发者工具的网络请求中复制完整 Cookie；Cookie 仅保存在本机。"
+    "cookie_tip": "登录 {name} 网页并进入任意直播间，在浏览器开发者工具的网络请求中复制完整 Cookie；Cookie 仅保存在本机。",
+    "open_link_confirm": "是否打开此链接？",
+    "open_download_confirm": "是否下载？"
 }

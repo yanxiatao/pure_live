@@ -1,14 +1,10 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:developer';
-
-import 'player_pool.dart';
-
 import 'dart:math' as math;
 
 import 'line_fallback_manager.dart';
 import '../models/player_state.dart';
-import 'preload_player_manager.dart';
 import '../models/player_engine.dart';
 import 'engine_fallback_manager.dart';
 
@@ -34,16 +30,14 @@ import 'package:pure_live/player/utils/player_consts.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/player/utils/pip_window_widget.dart';
 import 'package:pure_live/player/core/live_audio_service.dart';
-import 'package:pure_live/player/adapters/video_player_adapter.dart';
 import 'package:pure_live/common/utils/latest_async_value_queue.dart';
+import 'package:pure_live/player/adapters/player_adapter_factory.dart';
 import 'package:pure_live/modules/live_play/controllers/player_state.dart';
 import 'package:pure_live/modules/live_play/widgets/video_player/video_controller.dart';
 import 'package:pure_live/modules/live_play/widgets/danmaku/compact_danmaku_overlay.dart';
 
 class PlayerManager {
-  final PlayerPool playerPool;
   final EngineFallbackManager fallbackManager;
-  final PreloadPlayerManager preloadManager;
   final LineFallbackManager lineManager;
   final Duration audioModeSwitchTimeout;
 
@@ -60,9 +54,7 @@ class PlayerManager {
   Future<void>? _closeFuture;
 
   PlayerManager({
-    required this.playerPool,
     required this.fallbackManager,
-    required this.preloadManager,
     required this.lineManager,
     this.audioModeSwitchTimeout = const Duration(seconds: 5),
     this.audioModeVideoWarmRetention,
@@ -302,13 +294,19 @@ class PlayerManager {
     return w / h;
   }
 
+  Future<UnifiedPlayer> _createPlayer(PlayerEngine engine, {bool audioOnly = false}) async {
+    final player = await PlayerAdapterFactory.create(engine);
+    await player.init(audioOnly: audioOnly);
+    return player;
+  }
+
   Future<void> initialize({PlayerEngine engine = PlayerEngine.mediaKit, bool audioOnly = false}) async {
     if (_disposed) return;
     _stateSubject.add(PlayerState.initializing);
     try {
       _defaultEngine = engine;
       _runtimeEngine = engine;
-      _currentPlayer = await playerPool.getPlayer(engine, audioOnly: audioOnly);
+      _currentPlayer = await _createPlayer(engine, audioOnly: audioOnly);
       _runtimeAudioOnly = audioOnly;
       _requestedAudioOnly = audioOnly;
       _nativeAudioOnly = audioOnly;
@@ -683,10 +681,9 @@ class PlayerManager {
     _audioModeVideoWarmTimer = null;
     try {
       final oldPlayer = _currentPlayer;
-      final oldEngine = _runtimeEngine;
       await _clearSubscriptions();
       final targetAudioOnly = audioOnly ?? _runtimeAudioOnly;
-      final newPlayer = await playerPool.getPlayer(engine, audioOnly: targetAudioOnly);
+      final newPlayer = await _createPlayer(engine, audioOnly: targetAudioOnly);
       _currentPlayer = newPlayer;
       _runtimeEngine = engine;
       _runtimeAudioOnly = targetAudioOnly;
@@ -695,8 +692,8 @@ class PlayerManager {
       if (isManual) _defaultEngine = engine;
       log('Switch engine to $engine', name: 'PlayerManager');
       await _bindPlayerStreams(newPlayer);
-      if (oldPlayer != null && oldEngine != null) {
-        await _safeDestroyPlayer(oldPlayer, oldEngine);
+      if (oldPlayer != null) {
+        await _safeDestroyPlayer(oldPlayer);
       }
       videoKey.value = ValueKey("video_${DateTime.now().millisecondsSinceEpoch}");
       _scheduleAudioServiceSync(newPlayer, targetAudioOnly, room: currentFloatRoom, sessionId: _sessionId);
@@ -712,29 +709,12 @@ class PlayerManager {
     }
   }
 
-  Future<void> _safeDestroyPlayer(UnifiedPlayer player, PlayerEngine engine) async {
+  Future<void> _safeDestroyPlayer(UnifiedPlayer player) async {
     try {
       await player.hardDispose();
-      await playerPool.removeFromCache(engine);
     } catch (e, s) {
       log("destroy player error: $e", stackTrace: s);
     }
-  }
-
-  Future<void> preload(String url, List<String> playUrls, Map<String, String> headers) async {
-    if (_disposed || _isClosing) return;
-    final standby = await playerPool.getPlayer(_runtimeEngine!);
-    await preloadManager.preload(standby, url, playUrls, headers);
-  }
-
-  Future<void> seamlessSwitch() async {
-    if (_disposed || _isClosing) return;
-    await preloadManager.switchToStandby();
-    final player = preloadManager.current;
-    if (player == null) return;
-    await _clearSubscriptions();
-    _currentPlayer = player;
-    await _bindPlayerStreams(player);
   }
 
   Future<void> togglePlayPause() async {
@@ -762,10 +742,12 @@ class PlayerManager {
     final fitList = SettingsService.to.player.videoFitArray;
     if (fitList.isEmpty || index < 0 || index >= fitList.length) return;
     videoFitIndex.value = index;
-    if (_currentPlayer is BetterPlayerAdapter) {
-      final player = _currentPlayer as BetterPlayerAdapter;
-      player.betterPlayerController.setOverriddenFit(fitList[index]);
-    }
+    _applyVideoFit(_currentPlayer, fitList[index]);
+  }
+
+  void _applyVideoFit(UnifiedPlayer? player, BoxFit fit) {
+    if (player is! VideoFitAwarePlayer) return;
+    (player as VideoFitAwarePlayer).setVideoFit(fit);
   }
 
   Future<void> enablePip() async {
@@ -875,7 +857,10 @@ class PlayerManager {
                 Obx(
                   () => Positioned.fill(
                     child: isFloatingVideoVisible.value
-                        ? getVideoWidget(videoFitIndex.value, fitList: SettingsService.to.player.videoFitArray)
+                        ? getVideoWidget(
+                            SettingsService.to.player.videoFitIndex.v,
+                            fitList: SettingsService.to.player.videoFitArray,
+                          )
                         : const SizedBox.shrink(),
                   ),
                 ),
@@ -1042,7 +1027,12 @@ class PlayerManager {
                 onDoubleTap: () async {
                   await exitPip();
                 },
-                child: getVideoWidget(videoFitIndex.value, fitList: SettingsService.to.player.videoFitArray),
+                child: Obx(
+                  () => getVideoWidget(
+                    SettingsService.to.player.videoFitIndex.v,
+                    fitList: SettingsService.to.player.videoFitArray,
+                  ),
+                ),
               ),
               Positioned.fill(child: _buildCompactDanmaku()),
               Center(
@@ -1288,10 +1278,14 @@ class PlayerManager {
     bool trackPipSource = false,
     bool? audioOnlyOverride,
   }) {
-    // Read by the room's outer Obx. Audio/video presentation changes rebuild
-    // this surface without changing [videoKey] and remounting the native view.
-
+    // Floating/PiP callers already wrap this factory in Obx; keep their
+    // dependency registered while the inner observer covers direct callers.
+    videoPresentationRevision.value;
     return Obx(() {
+      // Runtime audio-only state is intentionally non-reactive because native
+      // mode changes are serialized. The revision publishes only the final
+      // presentation state while preserving the same texture/surface element.
+      videoPresentationRevision.value;
       final initialized = isInitialized.value;
       final showAudioOnly = audioOnlyOverride ?? _runtimeAudioOnly;
       final player = _currentPlayer;
@@ -1321,7 +1315,10 @@ class PlayerManager {
                         child: Container(color: Colors.black, child: _buildVideoWidget(player, boxFit)),
                       ),
                     ),
-                    if (showAudioOnly) Positioned.fill(child: buildAudioOnlyUI(Get.context!, currentFloatRoom)),
+                    if (showAudioOnly)
+                      Positioned.fill(
+                        child: Builder(builder: (context) => buildAudioOnlyUI(context, currentFloatRoom)),
+                      ),
                     if (controls != null) Positioned.fill(child: controls),
                   ],
                 ),
@@ -1333,23 +1330,13 @@ class PlayerManager {
     });
   }
 
-  Widget _buildVideoWidget(UnifiedPlayer player, boxFit) {
-    return FittedBox(
-      fit: boxFit,
-      clipBehavior: Clip.hardEdge,
-      child: StreamBuilder<List<int?>>(
-        stream: CombineLatestStream.list([width, height]),
-        builder: (context, snapshot) {
-          final data = snapshot.data;
-          if (data == null || data.length < 2 || data[0] == null || data[1] == null || data[0]! <= 0 || data[1]! <= 0) {
-            return const SizedBox.shrink();
-          }
-          final videoWidth = data[0]!.toDouble();
-          final videoHeight = data[1]!.toDouble();
-          return SizedBox(width: videoWidth, height: videoHeight, child: player.getVideoWidget());
-        },
-      ),
-    );
+  Widget _buildVideoWidget(UnifiedPlayer player, BoxFit boxFit) {
+    // Let each native adapter own its fit. Transforming a Windows texture with
+    // FittedBox makes the media_kit output-size guard see the source dimensions
+    // instead of the real viewport, which wastes GPU memory. Waiting for the
+    // dimension streams before mounting also creates a first-frame deadlock.
+    _applyVideoFit(player, boxFit);
+    return player.getVideoWidget();
   }
 
   Widget _buildPlaceholder() {
@@ -1415,8 +1402,10 @@ class PlayerManager {
     _sessionId++;
     lineManager.reset();
     await _clearSubscriptions();
-    if (_runtimeEngine != null) {
-      await playerPool.removeFromCache(_runtimeEngine!);
+    final player = _currentPlayer;
+
+    if (player != null) {
+      await player.hardDispose();
     }
     _currentPlayer = null;
     _runtimeEngine = null;
@@ -1575,7 +1564,7 @@ class PlayerManager {
     await _pipSubscription?.cancel();
     await _pipStateSubscription?.cancel();
     await _clearSubscriptions();
-    await playerPool.disposeAll();
+    await hardDispose();
     await Future.wait([
       _stateSubject.close(),
       _playingSubject.close(),

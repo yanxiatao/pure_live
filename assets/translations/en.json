@@ -140,6 +140,7 @@
     "downloading_apk": "Downloading Pure Live v{version}...",
     "downloading_progress": "Downloading v{version}... {progress}%",
     "downloading_version": "Downloading v{version}...",
+    "downloading_app": "Downloading {app}...",
     "effective_after_restart": "Takes effect after restart",
     "email": "Email",
     "empty_areas_room_subtitle": "Pull down to refresh data",
@@ -558,7 +559,7 @@
     "toolbox_room_jump": "Jump to Room",
     "toolbox_select_line": "Select Line",
     "toolbox_select_quality": "Select Quality",
-    "toolbox_support_content": "Supported link formats:\n\nBilibili:\nhttps://live.bilibili.com/xxxxx\nhttps://www.bilibili.com/xxxxx\nhttps://b23.tv/xxxxx\n\nHuya:\nhttps://www.huya.com/xxxxx\n\nDouyu:\nhttps://www.douyu.com/xxxxx\n\nDouyin Live/Video:\nhttps://live.douyin.com/xxxxx\nhttps://www.douyin.com/xxxxx\nhttps://v.douyin.com/xxxxx\nhttps://webcast.amemv.com/douyin/webcast/reflow/xxxxx\n\nKuaishou Live:\nhttps://live.kuaishou.com/u/xxxxx\nhttps://live.kuaishou.cn/u/xxxxx\n\nNetEase CC:\nhttps://cc.163.com/xxxxx",
+    "toolbox_support_content": "Supported link formats:\n\nBilibili:\nhttps://live.bilibili.com/xxxxx\nhttps://www.bilibili.com/xxxxx\nhttps://b23.tv/xxxxx\n\nHuya:\nhttps://www.huya.com/xxxxx\n\nDouyu:\nhttps://www.douyu.com/xxxxx\n\nDouyin Live/Video:\nhttps://live.douyin.com/xxxxx\nhttps://www.douyin.com/xxxxx\nhttps://v.douyin.com/xxxxx\nhttps://webcast.amemv.com/douyin/webcast/reflow/xxxxx\n\nKuaishou Live:\nhttps://live.kuaishou.com/u/xxxxx\nhttps://live.kuaishou.cn/u/xxxxx\n\nNetEase CC:\nhttps://cc.163.com/xxxxx\n\nTwitch:\nhttps://www.twitch.tv/xxxxx\nhttps://twitch.tv/xxxxx\n\nSOOP Live:\nhttps://www.sooplive.com/xxxxx\nhttps://sooplive.com/xxxxx\nhttps://play.sooplive.com/xxxxx\nhttps://www.sooplive.co.kr/xxxxx\nhttps://sooplive.co.kr/xxxxx\nhttps://play.sooplive.co.kr/xxxxx\n\nYY Live:\nhttps://www.yy.com/xxxxx\nhttps://yy.com/xxxxx\nhttps://www.yy.com/xxxxx/xxxxx?tempId=xxxxx\nhttps://yy.com/xxxxx/xxxxx?tempId=xxxxx",
     "toolbox_support_list": "Supported Platforms",
     "toolbox_title": "Link Parser",
     "tray_update_failed": "Failed to update system tray",
@@ -788,6 +789,7 @@
     "search_coverage_local": "{site} searches channels imported on this device and is separate from network anchor search.",
     "search_coverage_web_only": "{site} currently uses its web search entry; choose Continue in web search above.",
     "search_web_only_platform": "{site} currently uses its web search entry.",
+    "search_web_unavailable": "{site} only searches local content and has no web search entry.",
     "continue_web_search": "Continue in web search",
     "select_platform_for_web_search": "Select a platform first",
     "search_partial_failure": "Some platforms failed: {sites}",
@@ -1383,5 +1385,7 @@
     "multiview_line": "Line {index}",
     "multiview_volume": "Volume",
     "cookie_hint": "Paste the {name} Cookie",
-    "cookie_tip": "Sign in to {name} and open any live channel, then copy the complete Cookie from a browser developer-tools network request. The Cookie stays on this device."
+    "cookie_tip": "Sign in to {name} and open any live channel, then copy the complete Cookie from a browser developer-tools network request. The Cookie stays on this device.",
+    "open_link_confirm": "Do you want to open this link?",
+    "open_download_confirm": "Do you want to download this file?"
 }
