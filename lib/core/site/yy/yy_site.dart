@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:collection';
 
 import 'package:pure_live/common/index.dart';
-import 'package:pure_live/plugins/fjs_engine.dart';
 import 'package:pure_live/model/live_category.dart';
 import 'package:pure_live/core/common/core_log.dart';
 import 'package:pure_live/model/live_anchor_item.dart';
@@ -162,10 +161,7 @@ class YYSite implements LiveSite, LiveSiteRoomRefresher {
         subs.add(subCategory);
         continue;
       }
-      await FlutterJsEngine.instance.init();
-      var params = await FlutterJsEngine.instance.eval("pageInfo =$jsonText");
-
-      final pageInfo = params.rawResult;
+      final pageInfo = jsonDecode(jsonText) as Map<String, dynamic>;
       CoreLog.d('pageInfo: $pageInfo');
 
       final moduleId = pageInfo['pageBar']['moduleId'];
