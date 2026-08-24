@@ -120,13 +120,16 @@ class EdgeCookieCapture {
     } catch (_) {}
 
     try {
+      // detached 模式：不继承 stdout/stderr 管道。Edge（Chromium）会持续向
+      // stderr 写日志，若接了无人读取的管道，缓冲区写满后日志线程阻塞，
+      // 整个浏览器会冻结（实测根因）；detached 无管道故永不阻塞。
       _edgeProcess = await Process.start(edgePath, [
         '--remote-debugging-port=$port',
         '--user-data-dir=$profileDir',
         '--no-first-run',
         '--no-default-browser-check',
         target.loginUrl,
-      ]);
+      ], mode: ProcessStartMode.detached);
     } catch (error) {
       _log('launch failed: $error');
       _finish(null, EdgeCaptureState.failed);
