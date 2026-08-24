@@ -31,9 +31,6 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   /// 都必须使用同一套属性（seek 白名单、探测时长、LiveBufferPolicy 缓冲上限、
   /// 网络超时、音频驱动、代理、macOS 硬解关闭），避免两处配置漂移。
   static Future<void> applyNativeLiveProperties(dynamic native) async {
-    if (PlatformUtils.isAndroid) {
-      await native.setProperty('force-seekable', 'yes');
-    }
     await native.setProperty('force-seekable', 'yes');
 
     await native.setProperty('protocol_whitelist', 'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto');
@@ -160,7 +157,8 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
 
       if (_player.platform is NativePlayer) {
         final native = _player.platform as dynamic;
-
+        // Live adapters use one explicit seekability override. The upstream
+        // Android workaround duplicated this native property write.
         await applyNativeLiveProperties(native);
       }
 

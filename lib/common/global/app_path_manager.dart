@@ -4,8 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:pure_live/common/utils/windows_multi_instance_launcher.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pure_live/common/utils/windows_multi_instance_launcher.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:win32_registry/win32_registry.dart';
 
@@ -82,11 +82,13 @@ class AppPathManager {
       await _recoverMissingPersistentData(legacyRoots);
       await _recoverLegacyPluginPreferences(supportDir);
 
-      // EXE/portable installations keep plugin support, cache and temporary
-      // state under {app}\AppData as well. This runs before cache_manager and
-      // player plugins initialize.
-      PathProviderPlatform.instance = WindowsPortablePathProvider(delegate: originalPathProvider, dataRoot: rootPath);
-      configureWindowsPortableSharedPreferences(rootPath);
+      // Portable/EXE builds keep plugin support, cache and temporary state
+      // beside the executable. MSIX already receives a writable package data
+      // root from the system path provider and must retain that provider.
+      if (!_isWindowsMsix) {
+        PathProviderPlatform.instance = WindowsPortablePathProvider(delegate: originalPathProvider, dataRoot: rootPath);
+        configureWindowsPortableSharedPreferences(rootPath);
+      }
     }
   }
 
@@ -371,6 +373,17 @@ class AppPathManager {
   Future<String> getFontFamilyFolderPath(String id) async {
     final downloadDir = await getDir(dirDownload);
     return fontFamilyFolderPath(downloadDir.path, id);
+  }
+
+  bool get _isWindowsMsix {
+    if (!Platform.isWindows) return false;
+    return isWindowsMsixExecutablePath(Platform.resolvedExecutable);
+  }
+
+  @visibleForTesting
+  static bool isWindowsMsixExecutablePath(String path) {
+    final normalized = path.replaceAll('/', r'\').toLowerCase();
+    return normalized.contains(r'\windowsapps\');
   }
 
   @visibleForTesting

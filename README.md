@@ -12,17 +12,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/liuchuancong/pure_live/releases/latest">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/liuchuancong/pure_live">
+  <a href="https://github.com/wzgrx/pure_live/releases/latest">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/wzgrx/pure_live">
   </a>
-  <a href="https://github.com/liuchuancong/pure_live/actions/workflows/feature-build.yml">
-    <img alt="Manual Build" src="https://github.com/liuchuancong/pure_live/actions/workflows/feature-build.yml/badge.svg">
+  <a href="https://github.com/wzgrx/pure_live/actions/workflows/feature-build.yml">
+    <img alt="Manual Build" src="https://github.com/wzgrx/pure_live/actions/workflows/feature-build.yml/badge.svg">
   </a>
   <a href="https://github.com/liuchuancong/pure_live">
     <img alt="Stars" src="https://img.shields.io/github/stars/liuchuancong/pure_live?color=yellow">
   </a>
-  <a href="https://github.com/liuchuancong/pure_live/releases">
-    <img alt="Downloads" src="https://img.shields.io/github/downloads/liuchuancong/pure_live/total?style=flat-square">
+  <a href="https://github.com/wzgrx/pure_live/releases">
+    <img alt="Downloads" src="https://img.shields.io/github/downloads/wzgrx/pure_live/total?style=flat-square">
   </a>
   <a href="LICENSE">
     <img alt="License" src="https://img.shields.io/github/license/liuchuancong/pure_live?color=blue">
@@ -33,9 +33,11 @@
 
 > 本维护分支持续同步 [liuchuancong/pure_live](https://github.com/liuchuancong/pure_live)，并维护本机优先构建、正式签名、接口探测、Windows 数据迁移及高刷新率优化。
 
-- **最新稳定版**：[v2.7.0](https://github.com/liuchuancong/pure_live/releases/tag/v2.7.0)
-- **当前版本**：`2.7.0+4077`
-
+- **最新稳定版**：[v2.9.4](https://github.com/wzgrx/pure_live/releases/tag/v2.9.4)
+- **当前版本**：`2.9.4+4083`
+- **v2.9.4 上游源码基线**：`liuchuancong/pure_live@45127322`，包含多画面同看、纯 Dart 平台签名、语言切换与 Windows MSIX 数据路径修复
+- **本轮构建平台**：Android arm64-v8a、Windows x64、Linux x64、macOS Universal、iOS arm64
+- **质量门禁**：Flutter Analyze、自动化测试、接口探测与各平台构建记录见 `docs/STAGE_UPDATE_2_9_4.md`
 
 ![Pure Live 界面预览](assets/images/banner.png)
 
@@ -83,6 +85,11 @@ Pure Live 聚合多个第三方直播平台，并支持自定义直播源：
 | [平台接口与兼容性](docs/PLATFORM_COMPATIBILITY.md) | 分区、搜索、弹幕和人数指标的当前能力 |
 | [高刷新率与性能验证](docs/PERFORMANCE.md) | Android 120 Hz 适配、渲染优化和真机帧统计 |
 | [WebDAV 配置](docs/WEBDAV.md) | 通用配置字段、坚果云示例和故障排查 |
+| [v2.9.4 全平台稳定版](docs/STAGE_UPDATE_2_9_4.md) | 上游多画面、录制目录保护、平台签名/快手兼容与全平台交付 |
+| [v2.9.4 上游 Issue 审计](docs/ISSUE_AUDIT_2026_08_24.md) | #778、#779、#780、#782 的复现、根因与处理结果 |
+| [v2.9.3 Android 专项更新](docs/STAGE_UPDATE_2_9_3.md) | 横屏画质/线路内容驱动布局与小视口边界保护 |
+| [v2.9.2 Android 专项更新](docs/STAGE_UPDATE_2_9_2.md) | 横屏画质/线路、四宫格直播记录与左右分栏实时弹幕预览 |
+| [v2.9.1 Android 专项更新](docs/STAGE_UPDATE_2_9_1.md) | 横屏半屏内容面板、本地弹幕个性化与渲染缓存 |
 | [v2.1.5 阶段更新](docs/STAGE_UPDATE_2_1_5.md) | 本地弹幕同步、列表阅读、模板状态和 Windows 平滑滚动 |
 | [v2.1.6 Android 播放修复](docs/STAGE_UPDATE_2_1_6.md) | 音频/视频切换灰白画面与后台音频生命周期 |
 | [v2.2.0 阶段更新](docs/STAGE_UPDATE_2_2_0.md) | 播放恢复、音频模式、弹幕设置、Windows 多开与最终验证 |
@@ -119,6 +126,13 @@ Android / Android TV 支持多个播放器：
 当某个播放器出现黑屏、卡顿、硬解兼容性问题或者特定直播流无法播放时，可以在设置中切换播放器。
 
 Windows、Linux、macOS 等桌面平台使用对应平台的播放器实现。
+
+### 🖥️ 多画面同看
+
+- 支持双画面、四画面和一大多小聚焦布局。
+- 每格独立播放、暂停、音量、清晰度和线路，只有聚焦画面出声。
+- 聚焦画面可接入平台弹幕；快速切换使用最新音频焦点，避免多个画面同时出声。
+- 移动端最多同时保留 4 路解码，桌面端最多 9 路，并可让小画面自动使用低清晰度以控制占用。
 
 ### 💬 弹幕系统
 
@@ -291,6 +305,8 @@ Android 支持 ASMR 助眠模式。
 
 可以将直播保存到本地，在直播结束后进行回放。
 
+选择自定义位置时，程序只写入该位置下带所有权标记的 `PureLiveRecords` 专用子目录；“清空录制文件目录”和自动容量限制均只处理该目录，不会遍历删除所选父目录中的其他文件。
+
 支持配合：
 
 - 直播录制
@@ -351,7 +367,7 @@ Firebase 不是 Pure Live 使用的必要条件。
 
 ## 📥 下载
 
-前往 [维护分支 GitHub Releases](https://github.com/liuchuancong/pure_live/releases/latest) 获取最新安装包，并使用同一 Release 的 `SHA256SUMS.txt` 校验完整性。
+前往 [维护分支 GitHub Releases](https://github.com/wzgrx/pure_live/releases/latest) 获取最新安装包，并使用同一 Release 的 `SHA256SUMS.txt` 校验完整性。
 
 ### Android
 

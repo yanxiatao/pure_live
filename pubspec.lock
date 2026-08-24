@@ -85,10 +85,10 @@ packages:
     dependency: "direct main"
     description:
       name: archive
-      sha256: be169cf6ac481e052c4538715d88841d567150dfe1df38aaec76461a4e7b39f2
+      sha256: ace891da0862b0e4cabbb064ee3fd87b2728b898949fdb366d83fe98342c9f19
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
-    version: "4.1.0"
+    version: "4.2.0"
   args:
     dependency: transitive
     description:
@@ -463,15 +463,6 @@ packages:
       sha256: "7ed8ce4159d342eec4c65f4ea6eec57adaf9365404378541f38efc1da20a5b3d"
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
-    version: "1.0.0"
-  dart_quickjs:
-    dependency: "direct main"
-    description:
-      path: "."
-      ref: "0596dfcee794a6af7d6dd0bc6819ba80e0ed655d"
-      resolved-ref: "0596dfcee794a6af7d6dd0bc6819ba80e0ed655d"
-      url: "https://github.com/liuchuancong/dart_quickjs.git"
-    source: git
     version: "1.0.0"
   dart_sm:
     dependency: "direct main"
@@ -936,13 +927,6 @@ packages:
       url: "https://github.com/guide-inc-org/guide-flutter_inappwebview.git"
     source: git
     version: "0.7.0-beta.3"
-  flutter_js:
-    dependency: "direct main"
-    description:
-      path: "plugins/built_in_kotlin/flutter_js"
-      relative: true
-    source: path
-    version: "0.8.7"
   flutter_json:
     dependency: "direct main"
     description:
@@ -984,10 +968,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_smart_dialog
-      sha256: "7dd4078681291402ec39861d768787d27a0a9c4cd0912263a6a327654b96f6c1"
+      sha256: "2f50b6b120da18ceb59df42ee057e2f608a1776267203359b832e469c45a406b"
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
-    version: "5.1.1"
+    version: "5.3.0"
   flutter_spinkit:
     dependency: "direct main"
     description:
@@ -1503,10 +1487,10 @@ packages:
     dependency: transitive
     description:
       name: native_toolchain_c
-      sha256: "8aaead321425bd3f03bd5894aa27c8ea6993eab95531da7e59f5d39c6e5708ec"
+      sha256: a1c26117c48cebe5677b0cf0e33a980a79a7c5577effc86f52e5a0d309cdcb60
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
-    version: "0.18.0"
+    version: "0.19.3"
   nm:
     dependency: transitive
     description:
@@ -2232,14 +2216,6 @@ packages:
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
     version: "2.2.0"
-  sync_http:
-    dependency: transitive
-    description:
-      name: sync_http
-      sha256: "7f0cd72eca000d2e026bcd6f990b81d0ca06022ef4e32fb257b30d3d1014a961"
-      url: "https://mirrors.cloud.tencent.com/dart-pub/"
-    source: hosted
-    version: "0.3.1"
   syncfusion_flutter_core:
     dependency: transitive
     description:
@@ -2468,10 +2444,10 @@ packages:
     dependency: "direct main"
     description:
       name: volume_controller
-      sha256: "851b43150972f96fa04a16af1080be9cabcd740c1b7e91dc3f5be9461ff45010"
+      sha256: "9e77687434a3f4095d8faf5321ed1c8014f78d5c555231543717c155f03b446f"
       url: "https://mirrors.cloud.tencent.com/dart-pub/"
     source: hosted
-    version: "3.6.0"
+    version: "3.6.1"
   wakelock_plus:
     dependency: "direct main"
     description:

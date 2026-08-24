@@ -140,6 +140,9 @@ class LiveRoom {
   int? catchUpStart; // 时移开始时间戳
   int? catchUpEnd; // 时移结束时间戳
 
+  /// Local epoch-millisecond timestamp used by the viewing-history UI.
+  int? lastWatchedAt;
+
   // 添加未命名的默认构造函数
   LiveRoom({
     this.roomId,
@@ -171,6 +174,7 @@ class LiveRoom {
     this.isCatchUp = false,
     this.catchUpStart,
     this.catchUpEnd,
+    this.lastWatchedAt,
     List<String>? tagIds,
   }) : tagIds = tagIds ?? [];
 
@@ -205,7 +209,8 @@ class LiveRoom {
       catchUpUrl = json['catchUpUrl'],
       isCatchUp = json['isCatchUp'] ?? false,
       catchUpStart = json['catchUpStart'],
-      catchUpEnd = json['catchUpEnd'] {
+      catchUpEnd = json['catchUpEnd'],
+      lastWatchedAt = json['lastWatchedAt'] is num ? (json['lastWatchedAt'] as num).toInt() : null {
     // Earlier builds stored Huya's userCount/URI 8006 popularity in the
     // concurrent-viewer field. Current captures confirm both are popularity.
     if (platform == 'huya' && _hasExplicitAudienceValue(onlineViewers)) {
@@ -249,6 +254,7 @@ class LiveRoom {
     bool? isCatchUp,
     int? catchUpStart,
     int? catchUpEnd,
+    int? lastWatchedAt,
     List<String>? tagIds,
   }) {
     return LiveRoom(
@@ -281,6 +287,7 @@ class LiveRoom {
       isCatchUp: isCatchUp ?? this.isCatchUp,
       catchUpStart: catchUpStart ?? this.catchUpStart,
       catchUpEnd: catchUpEnd ?? this.catchUpEnd,
+      lastWatchedAt: lastWatchedAt ?? this.lastWatchedAt,
       tagIds: tagIds ?? this.tagIds,
     );
   }
@@ -295,6 +302,10 @@ class LiveRoom {
 
   bool hasSameIdentity(LiveRoom other) => identityKey == other.identityKey;
 
+  bool hasIdentity({required String platform, required String roomId}) {
+    return normalizedPlatformId == platform.trim().toLowerCase() && normalizedRoomId == roomId.trim();
+  }
+
   LiveRoom normalizedIdentityCopy() {
     if (platform == normalizedPlatformId && roomId == normalizedRoomId) return this;
     return copyWith(platform: normalizedPlatformId, roomId: normalizedRoomId);
@@ -308,7 +319,7 @@ class LiveRoom {
 
   @override
   String toString() {
-    return 'LiveRoom{roomId: $roomId, userId: $userId, link: $link, title: $title, nick: $nick, avatar: $avatar, cover: $cover, area: $area, watching: $watching, followers: $followers, platform: $platform, tagIds: $tagIds, introduction: $introduction, notice: $notice, status: $status, data: $data, danmakuData: $danmakuData, isRecord: $isRecord, liveStatus: $liveStatus, catchUpUrl: $catchUpUrl, isCatchUp: $isCatchUp}';
+    return 'LiveRoom{roomId: $roomId, userId: $userId, link: $link, title: $title, nick: $nick, avatar: $avatar, cover: $cover, area: $area, watching: $watching, followers: $followers, platform: $platform, tagIds: $tagIds, introduction: $introduction, notice: $notice, status: $status, data: $data, danmakuData: $danmakuData, isRecord: $isRecord, liveStatus: $liveStatus, catchUpUrl: $catchUpUrl, isCatchUp: $isCatchUp, lastWatchedAt: $lastWatchedAt}';
   }
 
   double getSavedVolume() {
@@ -348,6 +359,7 @@ class LiveRoom {
       'isCatchUp': isCatchUp,
       'catchUpStart': catchUpStart,
       'catchUpEnd': catchUpEnd,
+      'lastWatchedAt': lastWatchedAt,
     };
   }
 
@@ -485,13 +497,64 @@ class LiveRoom {
 }
 
 extension LiveRoomExtension on LiveRoom {
-  /// 设置 离线状态 失败
+  LiveRoom mergeFrom(LiveRoom incoming) {
+    if (!hasSameIdentity(incoming)) return this;
+
+    return copyWith(
+      roomId: incoming.normalizedRoomId,
+      platform: incoming.normalizedPlatformId,
+      userId: _preferValue(incoming.userId, userId),
+      link: _preferValue(incoming.link, link),
+      title: _preferValue(incoming.title, title),
+      nick: _preferValue(incoming.nick, nick),
+      avatar: _preferValue(incoming.avatar, avatar),
+      cover: _preferValue(incoming.cover, cover),
+      area: _preferValue(incoming.area, area),
+
+      watching: _preferValue(incoming.watching, watching),
+      audienceMetricType:
+          incoming.audienceMetricType != null && incoming.audienceMetricType != AudienceMetricType.unknown
+          ? incoming.audienceMetricType
+          : audienceMetricType,
+      popularity: _preferValue(incoming.popularity, popularity),
+      onlineViewers: _preferValue(incoming.onlineViewers, onlineViewers),
+      totalViewers: _preferValue(incoming.totalViewers, totalViewers),
+      followers: _preferValue(incoming.followers, followers),
+
+      tagIds: incoming.tagIds.isNotEmpty ? incoming.tagIds : tagIds,
+
+      introduction: _preferValue(incoming.introduction, introduction),
+      notice: _preferValue(incoming.notice, notice),
+
+      status: incoming.status ?? status,
+      liveStatus: incoming.liveStatus ?? LiveStatus.offline,
+      isRecord: incoming.isRecord ?? isRecord,
+
+      data: null,
+      danmakuData: null,
+
+      epgId: _preferValue(incoming.epgId, epgId),
+      currentProgramme: _preferValue(incoming.currentProgramme, currentProgramme),
+      currentProgrammeDescription: _preferValue(incoming.currentProgrammeDescription, currentProgrammeDescription),
+
+      catchUpUrl: _preferValue(incoming.catchUpUrl, catchUpUrl),
+      isCatchUp: incoming.isCatchUp ?? isCatchUp,
+      catchUpStart: incoming.catchUpStart ?? catchUpStart,
+      catchUpEnd: incoming.catchUpEnd ?? catchUpEnd,
+
+      lastWatchedAt: incoming.lastWatchedAt ?? lastWatchedAt,
+    );
+  }
+
+  String? _preferValue(String? incoming, String? current) {
+    if (incoming == null || incoming.trim().isEmpty) {
+      return current;
+    }
+    return incoming;
+  }
+
   LiveRoom getLiveRoomWithError() {
-    var liveRoom = this;
-    liveRoom.liveStatus = LiveStatus.offline;
-    liveRoom.status = false;
-    liveRoom.isRecord = false;
-    return liveRoom;
+    return copyWith(liveStatus: LiveStatus.offline, status: false, isRecord: false);
   }
 
   LiveRoom fillFromDetail(LiveRoom? detail) {

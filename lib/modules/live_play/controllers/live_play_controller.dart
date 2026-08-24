@@ -119,7 +119,7 @@ class LivePlayController extends GetxController
         isCurrentRoomAudioOnly: initialAudioOnly,
         hasUseDefaultResolution: restored?.hasUseDefaultResolution ?? false,
       ),
-      ui: UIState(closeTimes: 60, closeTimeFlag: false),
+      ui: UIState(closeTimes: 60, closeTimeFlag: false, displayVideoLayer: true),
     );
     // Re-entering from the app floating window continues the same room session.
     // Resetting the timer here extended an existing sleep session and also
@@ -633,19 +633,17 @@ class LivePlayController extends GetxController
 
       var liveRoom = fetchedRoom.withAudienceFallbackFrom(state.value.room.detail!);
       liveRoom = liveRoom.fillFromDetail(state.value.room.detail);
+
+      updateRoom(detail: liveRoom);
       if (!_isRoomLoadCurrent(loadEpoch, roomId, requestedPlatform)) return liveRoom;
       unawaited(getSuperChatMessage(roomId, platform: requestedPlatform, loadEpoch: loadEpoch));
 
       if (currentSite.id == Sites.iptvSite) {
-        updateRoom(detail: liveRoom);
         _initIptvPlayer();
         return liveRoom;
       }
 
       _handleCurrentLineAndQuality(reloadDataType, line, isReCalculate);
-
-      updateRoom(detail: liveRoom);
-      updateUI(refreshKey: state.value.ui.refreshKey + 1);
 
       if (liveRoom.liveStatus == LiveStatus.unknown) {
         _handleUnknownStatus();
@@ -816,14 +814,11 @@ class LivePlayController extends GetxController
   }
 
   Future<void> setResolution(ReloadDataType reloadDataType, int qualityIndex, int lineIndex) async {
-    invalidateRoomLoad();
-    playerController.invalidateLoad();
-    await GlobalPlayerService.instance.player.close();
-    await playerController.destroyPlayer();
-
-    updatePlayer(currentQuality: qualityIndex, currentLineIndex: lineIndex);
-
-    await onInitPlayerState(reloadDataType: reloadDataType, line: lineIndex, isReCalculate: false);
+    await playerController.switchStreamSelection(
+      type: reloadDataType,
+      qualityIndex: qualityIndex,
+      lineIndex: lineIndex,
+    );
   }
 
   Future<void> openNaviteAPP() async {
