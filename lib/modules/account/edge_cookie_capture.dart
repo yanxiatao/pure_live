@@ -211,7 +211,9 @@ class EdgeCookieCapture {
           if (shouldValidate) {
             lastValidationAt = now;
             final validation = await CookieValidator.validate(target.platform, _lastCookie!);
-            if (validation == CookieValidationStatus.valid) {
+            // valid：登录态确认生效；unverified：平台无校验端点，特征即真相。
+            // 其余（invalid/error）保持 Edge 打开等待用户完成验证或网络恢复。
+            if (validation == CookieValidationStatus.valid || validation == CookieValidationStatus.unverified) {
               _finish(_lastCookie, EdgeCaptureState.captured);
               return _lastCookie;
             }
