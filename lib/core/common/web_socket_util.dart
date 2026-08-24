@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'dart:io' as io;
+
+import 'package:pure_live/common/services/settings_service.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -16,6 +19,23 @@ WebSocketChannel _connectIoWebSocket(
   Iterable<String>? protocols,
   Map<String, dynamic>? headers,
 }) {
+  // 弹幕连接遵循应用代理设置：启用时经 HTTP 代理的 CONNECT 隧道
+  // （customClient 透传给 dart:io 的 WebSocket.connect，由 findProxy
+  // 自动对 wss/ws 做 CONNECT 隧道化），与 HTTP 请求的代理行为一致。
+  final proxyCtrl = SettingsService.to.proxy;
+  if (proxyCtrl.enableAppProxy.value &&
+      proxyCtrl.appProxyHost.value.trim().isNotEmpty &&
+      proxyCtrl.appProxyPort.value > 0) {
+    final client = io.HttpClient()
+      ..findProxy = (uri) => 'PROXY ${proxyCtrl.appProxyHost.value.trim()}:${proxyCtrl.appProxyPort.value}';
+    return IOWebSocketChannel.connect(
+      endpoint,
+      connectTimeout: connectTimeout,
+      protocols: protocols,
+      headers: headers,
+      customClient: client,
+    );
+  }
   return IOWebSocketChannel.connect(endpoint, connectTimeout: connectTimeout, protocols: protocols, headers: headers);
 }
 
