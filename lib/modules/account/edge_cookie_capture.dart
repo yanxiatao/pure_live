@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/modules/account/cookie_validator.dart';
 
@@ -128,6 +127,8 @@ class EdgeCookieCapture {
         '--user-data-dir=$profileDir',
         '--no-first-run',
         '--no-default-browser-check',
+        // 禁用账号同步：抓取环境保持独立，不与 Microsoft 账号关联。
+        '--disable-sync',
         target.loginUrl,
       ], mode: ProcessStartMode.detached);
     } catch (error) {
