@@ -152,6 +152,7 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           gh workflow run build_pure_live_release.yml \
+            --repo yanxiatao/pure_live \
             --ref master \
             -f create_release=true \
             -f run_quality=true \

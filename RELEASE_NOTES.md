@@ -1,10 +1,67 @@
+# Pure Live v2.9.7
+
+v2.9.7 build 4086 is an Android audience-metric and ranking consistency update.
+
+## Audience semantics
+
+- Audited current public payloads for Douyu, Huya, Douyin, Kuaishou, NetEase CC, Twitch, SOOP Live and YY Live. Douyu `ol/hot`, Huya `totalCount/userCount/iAttendeeCount` and YY `users` remain platform heat rather than concurrent head counts.
+- Douyin now reads the current anonymous feed's top-level `user_count` as concurrent viewers and no longer stores that value as cumulative views when `total_user` is an unavailable zero placeholder.
+- NetEase CC now treats `webcc_visitor`, `hot_score` and `visitor` as heat aliases; only `vision_visitor/online_num` can populate the online-viewer field.
+- SOOP recommendation and search cards now use `total_view_cnt`, including both PC and mobile viewers. Category `view_cnt` remains authoritative, explicit PC/mobile fields are summed as a fallback, and missing player-detail counts remain pending instead of becoming a false zero.
+
+## Ranking and regression coverage
+
+- Popular-platform pages now share the same descending, metric-aware and deterministic comparator as favourites, search and room pickers. Changing heat/online mode refreshes and re-ranks the active platform; CC uses a 100-room candidate window for meaningful real-online ordering.
+- Existing interface probes now verify each platform's audience-field contract as part of the 40-check gate, while focused parser tests cover the Douyin, CC and SOOP regressions and heat/online ordering.
+- Synchronized remotes before source freeze; upstream remains `liuchuancong/pure_live@974f4c32` with no newer commit at release preparation time.
+- Version: `2.9.7+4086`.
+- This release publishes Android `arm64-v8a`; Windows, Linux, macOS and iOS remain on their v2.9.4 artifacts.
+
+---
+
+# Pure Live v2.9.6
+
+v2.9.6 build 4085 is an Android platform-interface and upstream synchronization update.
+
+## Platform interfaces
+
+- Fixed the current Douyin recommendation envelope that could otherwise index a string/list as a map and surface `type 'String' is not a subtype of type 'int' of 'index'`.
+- Douyin parsing now accepts current and legacy response shapes, embedded room JSON and missing optional fields; its live probe also requires a real playback descriptor rather than only card metadata.
+- Bilibili popularity uses the public `sort=online` ranking source plus deterministic descending client sorting instead of a personalized recommendation order.
+- Bilibili room metadata validates signed responses before indexing, refreshes stale WBI keys and performs one bounded retry when the platform rejects the signature.
+- Added playback-level live probes for Bilibili quality/CDN descriptors, Huya room/bitrate/FLV-HLS lines and CC's two-step room mapping/playback contract.
+
+## Upstream and regression coverage
+
+- Synchronized and merged upstream through `liuchuancong/pure_live@974f4c32`, including download confirmation, version history and fullscreen viewing-record improvements.
+- Preserved the maintained repository's launch refresh, background playback continuity, quality switching, local-first serial build policy and official signing workflow.
+- The final gate covers 40 public interface checks across Bilibili, Douyu, Huya, Douyin, Kuaishou, CC, Twitch, SOOP Live and YY Live, in addition to Flutter Analyze and the complete automated test suite.
+- Version: `2.9.6+4085`.
+- This release publishes Android `arm64-v8a`; Windows, Linux, macOS and iOS remain on their v2.9.4 artifacts.
+
+---
+
 # Pure Live v2.9.5
 
-v2.9.5 build 4084 is an Android stability update for Douyu playback and the newly synchronized YY platform.
+v2.9.5 build 4084 is an Android stability update for playback quality, platform interfaces and the newly synchronized YY platform.
+
+## Quality and line switching
+
+- Added a shared stable quality identifier and transactional switching: the UI changes only after the target source opens, stale requests are discarded, failed opens keep the previous source, line indices are clamped and duplicate/blank lines are removed.
+- Bilibili now reads the server's actual `current_qn`; Huya replaces a stale `ratio` (and removes it for source quality); Douyin joins streams by `sdk_key`; Douyu preserves the platform's opaque rate order instead of numerically sorting it.
+- Twitch master variants are parsed as attribute/URI pairs without shared mutable state; Kuaishou, CC, SOOP, YY and IPTV received stable IDs, defensive payload handling and deterministic playback fixtures.
+- The fullscreen quality/line dialog now derives its total size from the real option rows. It removes redundant header values, gives the choice buttons the main visual area and only keeps large panes when their content actually needs scrolling.
+- A handled playback error finishing after an overlay lifecycle change no longer triggers a second uncaught toast exception.
+
+## Audience metrics and ranking
+
+- CC `webcc_visitor` heat is separated from `vision_visitor/online_num` concurrent viewers.
+- Concurrent ranking compares explicit, pending and heat-only tiers before numeric values, then uses stable room identity to stop equal cards from jumping during refresh.
+- Douyin no longer treats cumulative `total_user` fields as current online viewers; SOOP joins the supported concurrent-platform settings.
 
 ## Douyu playback
 
-- Synchronized the upstream baseline through `liuchuancong/pure_live@cc1f4dca`.
+- Synchronized the upstream baseline through `liuchuancong/pure_live@a161a324` with real merge ancestry, including the latest version-history transport/parser update.
 - The H5 stream request now uses one session DID and consistent browser headers, refreshes stale signing descriptors, and performs one bounded retry.
 - Quality and CDN parsing tolerates partial response shapes, removes duplicate lines, and validates the final decoded stream URL.
 - Actual media requests now receive Douyu Referer, Origin, User-Agent and matching DID cookies on every player backend.

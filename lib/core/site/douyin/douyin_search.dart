@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/core/common/core_log.dart';
 import 'package:pure_live/core/common/http_client.dart';
+import 'package:pure_live/core/site/douyin/douyin_audience.dart';
 
 class DouyinSearch {
   static const String host = 'https://live.douyin.com';
@@ -228,16 +229,11 @@ class DouyinSearch {
       raw['cover_url'],
     ]);
 
-    final roomStats = _asMap(room['stats']);
-    final rawStats = _asMap(raw['stats']);
-
-    final onlineText = _firstNonEmpty([
-      roomStats?['user_count_str'],
-      raw['user_count_str'],
-      room['user_count_str'],
-      raw['user_count'],
-      rawStats?['total_user_str'],
-    ]);
+    final roomOnline = douyinOnlineViewers(room);
+    final onlineViewers = roomOnline.isNotEmpty ? roomOnline : douyinOnlineViewers(raw);
+    final roomTotal = douyinTotalViewers(room);
+    final totalViewers = roomTotal.isNotEmpty ? roomTotal : douyinTotalViewers(raw);
+    final nativeAudience = totalViewers.isNotEmpty ? totalViewers : onlineViewers;
 
     String? tagText;
 
@@ -250,8 +246,6 @@ class DouyinSearch {
     }
 
     tagText = _firstNonEmpty([raw['video_feed_tag'], tagText, _mapValue(raw['partition'], 'title'), fallback['tag']]);
-
-    [if (tagText.isNotEmpty) tagText, if (onlineText.isNotEmpty) onlineText].join(' ');
 
     final status =
         (raw['status'] is num ? (raw['status'] as num).toInt() : int.tryParse(raw['status']?.toString() ?? '') ?? 0) ==
@@ -274,10 +268,10 @@ class DouyinSearch {
       area: tagText,
       status: status,
       liveStatus: status ? LiveStatus.live : LiveStatus.offline,
-      watching: onlineText,
-      totalViewers: onlineText,
-      onlineViewers: _douyinOnlineViewers(raw),
-      audienceMetricType: AudienceMetricType.totalViewers,
+      watching: nativeAudience,
+      totalViewers: totalViewers,
+      onlineViewers: onlineViewers,
+      audienceMetricType: totalViewers.isNotEmpty ? AudienceMetricType.totalViewers : AudienceMetricType.onlineViewers,
       link: 'https://live.douyin.com/$realWebRid',
     );
   }
@@ -514,8 +508,6 @@ class DouyinSearch {
           final owner = _asMap(room['owner']) ?? {};
           final cover = _asMap(room['cover']) ?? {};
           final avatar = _asMap(owner['avatar_thumb']) ?? {};
-          final stats = _asMap(room['stats']) ?? {};
-
           final coverList = cover['url_list'];
           final avatarList = avatar['url_list'];
 
@@ -533,7 +525,9 @@ class DouyinSearch {
 
           final rid = webRid.isNotEmpty ? webRid : roomId;
 
-          final online = stats['user_count_str']?.toString() ?? '';
+          final totalViewers = douyinTotalViewers(room);
+          final onlineViewers = douyinOnlineViewers(room);
+          final nativeAudience = totalViewers.isNotEmpty ? totalViewers : onlineViewers;
 
           rooms.add(
             LiveRoom(
@@ -546,10 +540,12 @@ class DouyinSearch {
               area: itemMap['tag_name']?.toString() ?? '',
               status: true,
               liveStatus: LiveStatus.live,
-              watching: online,
-              totalViewers: online,
-              onlineViewers: _douyinOnlineViewers(room),
-              audienceMetricType: AudienceMetricType.totalViewers,
+              watching: nativeAudience,
+              totalViewers: totalViewers,
+              onlineViewers: onlineViewers,
+              audienceMetricType: totalViewers.isNotEmpty
+                  ? AudienceMetricType.totalViewers
+                  : AudienceMetricType.onlineViewers,
               link: 'https://live.douyin.com/$rid',
             ),
           );
@@ -600,33 +596,4 @@ class DouyinSearch {
       return [];
     }
   }
-}
-
-String _douyinOnlineViewers(dynamic room) {
-  if (room is! Map) {
-    return '';
-  }
-
-  final stats = room['room_view_stats'];
-  final roomStats = room['stats'];
-
-  final candidates = <dynamic>[
-    if (stats is Map) stats['user_count'],
-    if (stats is Map) stats['online_user_count'],
-    if (stats is Map) stats['online_user_for_anchor'],
-    if (roomStats is Map) roomStats['user_count'],
-    if (roomStats is Map) roomStats['online_user_count'],
-    if (roomStats is Map) roomStats['online_user_for_anchor'],
-    if (roomStats is Map) roomStats['total_user_str'],
-  ];
-
-  for (final value in candidates) {
-    final text = value?.toString().trim() ?? '';
-
-    if (LiveRoom.parseAudienceNumber(text) > 0) {
-      return text;
-    }
-  }
-
-  return '';
 }

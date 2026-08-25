@@ -1,18 +1,21 @@
 import 'dart:async';
-
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/modules/popular/popular_grid_controller.dart';
+
 
 class PopularController extends GetxController with GetTickerProviderStateMixin {
   late TabController tabController;
   int index = 0;
-  late List<Site> sites;
+  final RxList<Site> sites = <Site>[].obs;
   bool _isTabControllerInitialized = false;
   bool _isClosing = false;
   int _generation = 0;
   Timer? _settledTabLoadTimer;
   Timer? _adjacentWarmTimer;
+  Timer? _audienceRefreshTimer;
   Worker? _hotAreasWorker;
+  Worker? _audienceModeWorker;
+  Worker? _audiencePlatformsWorker;
 
   @override
   void onInit() {
@@ -24,6 +27,8 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
       if (_isClosing) return;
       _initTabController(isFirstLoad: false);
     }, time: const Duration(milliseconds: 150));
+    _audienceModeWorker = ever(SettingsService.to.app.preferRealOnlineCounts, (_) => _scheduleAudienceRefresh());
+    _audiencePlatformsWorker = ever(SettingsService.to.app.realOnlinePlatforms, (_) => _scheduleAudienceRefresh());
   }
 
   void initControllers(List<Site> sites) {
@@ -56,6 +61,13 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
             return PopularServerFixedController(site, fixedSize: 60);
           }
 
+          if (site.id == Sites.ccSite) {
+            // CC's server order is heat-based. Fetch a larger stable candidate
+            // window so real-online mode can rank by vision_visitor rather
+            // than merely reordering each 20-card slice.
+            return PopularServerFixedController(site, fixedSize: 100);
+          }
+
           if (site.id == Sites.douyinSite) {
             return PopularServerFixedController(site, fixedSize: 20);
           }
@@ -75,7 +87,10 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
 
     _settledTabLoadTimer?.cancel();
     _adjacentWarmTimer?.cancel();
+    _audienceRefreshTimer?.cancel();
     _hotAreasWorker?.dispose();
+    _audienceModeWorker?.dispose();
+    _audiencePlatformsWorker?.dispose();
 
     if (_isTabControllerInitialized) {
       tabController.removeListener(_handleTabChange);
@@ -84,6 +99,15 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
     }
 
     super.onClose();
+  }
+
+  void _scheduleAudienceRefresh() {
+    if (_isClosing) return;
+    _audienceRefreshTimer?.cancel();
+    _audienceRefreshTimer = Timer(const Duration(milliseconds: 160), () {
+      if (_isClosing) return;
+      unawaited(refreshCurrentData());
+    });
   }
 
   void _initTabController({required bool isFirstLoad}) {
@@ -102,8 +126,7 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
         tabController.dispose();
         _isTabControllerInitialized = false;
       }
-
-      sites = newSites;
+      sites.assignAll(newSites);
       index = 0;
       return;
     }
@@ -113,32 +136,27 @@ class PopularController extends GetxController with GetTickerProviderStateMixin 
         ? sites[index].id
         : null;
 
-    sites = newSites;
-
-    initControllers(sites);
-
     if (isFirstLoad) {
       final preferPlatform = SettingsService.to.fav.preferPlatform.v;
-      final pIndex = sites.indexWhere((e) => e.id == preferPlatform);
+      final pIndex = newSites.indexWhere((e) => e.id == preferPlatform);
       index = pIndex == -1 ? 0 : pIndex;
     } else if (oldSiteId != null) {
-      final newIndex = sites.indexWhere((e) => e.id == oldSiteId);
-      index = newIndex == -1 ? oldIndex.clamp(0, sites.length - 1) : newIndex;
+      final newIndex = newSites.indexWhere((e) => e.id == oldSiteId);
+      index = newIndex == -1 ? oldIndex.clamp(0, newSites.length - 1) : newIndex;
     } else {
-      index = oldIndex.clamp(0, sites.length - 1);
+      index = oldIndex.clamp(0, newSites.length - 1);
     }
-
+    initControllers(newSites);
     if (_isTabControllerInitialized) {
       tabController.removeListener(_handleTabChange);
       tabController.dispose();
       _isTabControllerInitialized = false;
     }
-
-    tabController = TabController(length: sites.length, vsync: this, initialIndex: index);
-
+    // Update the source list before exposing the new TabController.
+    sites.assignAll(newSites);
+    tabController = TabController(length: newSites.length, vsync: this, initialIndex: index);
     tabController.addListener(_handleTabChange);
     _isTabControllerInitialized = true;
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_isClosing || generation != _generation) return;
       unawaited(_loadDataAtIndex(index, generation: generation));
