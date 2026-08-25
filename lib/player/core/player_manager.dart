@@ -893,7 +893,6 @@ class PlayerManager {
   Future<void> exitPip() async {
     if (Platform.isWindows) {
       await WindowService().exitWinPiP();
-      GlobalPlayerState.to.reset();
       isInPip.value = false;
     }
   }
@@ -1430,8 +1429,33 @@ class PlayerManager {
     // FittedBox makes the media_kit output-size guard see the source dimensions
     // instead of the real viewport, which wastes GPU memory. Waiting for the
     // dimension streams before mounting also creates a first-frame deadlock.
+    final videoWidget = player.getVideoWidget();
+
     _applyVideoFit(player, boxFit);
-    return player.getVideoWidget();
+    if (PlatformUtils.isMobile) {
+      return FittedBox(
+        fit: boxFit,
+        clipBehavior: Clip.hardEdge,
+        child: StreamBuilder<List<int?>>(
+          stream: CombineLatestStream.list([width, height]),
+          builder: (context, snapshot) {
+            final data = snapshot.data;
+            if (data == null ||
+                data.length < 2 ||
+                data[0] == null ||
+                data[1] == null ||
+                data[0]! <= 0 ||
+                data[1]! <= 0) {
+              return const SizedBox.shrink();
+            }
+            final videoWidth = data[0]!.toDouble();
+            final videoHeight = data[1]!.toDouble();
+            return SizedBox(width: videoWidth, height: videoHeight, child: player.getVideoWidget());
+          },
+        ),
+      );
+    }
+    return videoWidget;
   }
 
   Widget _buildPlaceholder() {

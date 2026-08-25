@@ -1353,6 +1353,7 @@
     "windows_pip_reset_position_subtitle": "Clear the saved bounds and reopen PiP at the lower-right of the display containing the app",
     "windows_pip_reset_position_confirm": "Clear the saved PiP position and size?",
     "open_new_window": "Open an independent player window",
+    "open_new_window_subtitle": "Open the current stream in a separate window",
     "open_room_in_new_window": "Play this room in a new window",
     "open_new_window_failed": "The new window did not start. Try again.",
     "danmaku_repeat_filter": "Repeated danmaku filter",
@@ -1387,5 +1388,15 @@
     "cookie_hint": "Paste the {name} Cookie",
     "cookie_tip": "Sign in to {name} and open any live channel, then copy the complete Cookie from a browser developer-tools network request. The Cookie stays on this device.",
     "open_link_confirm": "Do you want to open this link?",
-    "open_download_confirm": "Do you want to download this file?"
+    "open_download_confirm": "Do you want to download this file?",
+    "open_panel": "Open Panel",
+    "close_panel": "Close Panel",
+    "play_settings": "Play Settings",
+    "recording_cannot_start": "无法开始录制",
+    "recording_private_storage": "当前录制目录位于 Android 应用私有目录，请重新选择录制目录。",
+    "history_limit": "History Limit",
+    "clear_history": "Clear History",
+    "clear_history_confirm": "Are you sure you want to clear all history records?",
+    "current_value": "Current Value",
+    "items": "items"
 }
