@@ -118,6 +118,20 @@ jobs:
           flutter-version-file: .fvmrc
           cache: true
 
+      # 合并带入上游依赖与代码风格变更后，自动修复两类高频门禁失败：
+      # 1. pubspec.lock 与合并后 pubspec.yaml 失配 → 重新解析生成 lock；
+      # 2. 上游 Dart 文件格式与本仓库 dart format 规范不一致 → 统一格式化。
+      - name: Auto-fix lockfile and formatting
+        if: steps.merge.outputs.merged != 'false'
+        run: |
+          flutter pub get
+          files=$(git diff --name-only --diff-filter=ACMR HEAD -- '*.dart' | grep -v 'lib/core/scripts/douyin_sign.dart' || true)
+          if [ -n "$files" ]; then
+            dart format $files
+            git add -A
+            git commit --no-edit || true
+          fi
+
       - name: Quality gate (analyze + multiview tests)
         id: gate
         if: steps.merge.outputs.merged != 'false'
