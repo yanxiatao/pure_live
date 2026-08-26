@@ -4,14 +4,14 @@ import 'package:pure_live/modules/version/version_controller.dart';
 
 void main() {
   test('maintained build reads updates and release assets from the same repository', () {
-    expect(VersionUtil.projectUrl, 'https://github.com/liuchuancong/pure_live');
+    expect(VersionUtil.projectUrl, 'https://github.com/yanxiatao/pure_live');
     expect(VersionUtil.issuesUrl, '${VersionUtil.projectUrl}/issues');
-    expect(VersionUtil.releaseUrl, contains('/repos/liuchuancong/pure_live/releases'));
+    expect(VersionUtil.releaseUrl, contains('/repos/yanxiatao/pure_live/releases'));
   });
 
   test('release URLs match locally produced artifact names', () {
     const urls = ReleaseAssetUrls(
-      projectUrl: 'https://github.com/liuchuancong/pure_live',
+      projectUrl: 'https://github.com/yanxiatao/pure_live',
       version: '2.1.4',
       buildNumber: 52,
     );
