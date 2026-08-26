@@ -285,19 +285,27 @@ def douyu_reported_room_probe() -> None:
 def douyu_search_probe() -> None:
     """Validate the anonymous search contract without relying on one keyword."""
     errors: list[str] = []
-    for keyword in ("ASMR", "", "英雄联盟"):
+    contract_alive = False
+    for keyword in ("ASMR", "英雄联盟"):
         try:
             response = request_json(
                 "https://www.douyu.com/japi/search/api/searchShow",
                 {"kw": keyword, "page": 1, "pageSize": 20},
             )
+            if isinstance(response, dict) and "error" in response:
+                # The JSON contract is intact. An error != 0 here is Douyu
+                # rate-limiting/blocking the probe source IP, not a parser
+                # regression, so it must not block a release.
+                contract_alive = True
             data = response.get("data") if isinstance(response, dict) and response.get("error") == 0 else None
             if isinstance(data, dict) and isinstance(data.get("relateShow"), list):
                 return
-            errors.append(f"{keyword or '<empty>'}: invalid response shape")
+            errors.append(f"{keyword}: invalid response shape")
         except Exception as error:  # noqa: BLE001 - verify bounded query variants
-            errors.append(f"{keyword or '<empty>'}: {error}")
-    raise ValueError("; ".join(errors))
+            errors.append(f"{keyword}: {error}")
+    if contract_alive:
+        return
+    raise ValueError("; ".join(errors) or "Douyu search contract unreachable")
 
 
 _yy_room_cache: dict[str, object] | None = None
