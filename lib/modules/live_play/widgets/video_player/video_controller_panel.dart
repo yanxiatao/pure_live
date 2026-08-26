@@ -12,6 +12,7 @@ import 'package:pure_live/common/utils/live_url_tool.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:scrollview_observer/scrollview_observer.dart';
 import 'package:pure_live/modules/live_play/states/load_type.dart';
+import 'package:pure_live/player/core/portrait_stream_support.dart';
 import 'package:pure_live/modules/live_play/dialogs/play_other.dart';
 import 'package:pure_live/core/iptv/local/database.dart' as database;
 import 'package:pure_live/modules/live_play/controllers/player_state.dart';
@@ -144,12 +145,16 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
                     ),
                   ),
                 ),
-                Obx(
-                  () => Offstage(
-                    offstage: controller.hideDanmaku.value,
+                Obx(() {
+                  final manager = GlobalPlayerService.instance.player;
+                  final hideForPortrait =
+                      manager.isVerticalVideo.value &&
+                      SettingsService.to.player.portraitDanmakuMode == PortraitDanmakuMode.hidden;
+                  return Offstage(
+                    offstage: controller.hideDanmaku.value || hideForPortrait,
                     child: DanmakuViewer(key: controller.danmuKey, controller: controller),
-                  ),
-                ),
+                  );
+                }),
                 GestureDetector(
                   onTapDown: (details) => _lastTapPosition = details.globalPosition,
                   onTap: () {
@@ -670,6 +675,14 @@ class DanmakuViewer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Obx(() {
       final settings = SettingsService.to.danmaku;
+      final playerSettings = SettingsService.to.player;
+      final portraitSource = GlobalPlayerService.instance.player.isVerticalVideo.value;
+      final portraitMode = portraitSource ? playerSettings.portraitDanmakuMode : PortraitDanmakuMode.followGlobal;
+      final effectiveArea = switch (portraitMode) {
+        PortraitDanmakuMode.upperQuarter => controller.danmakuArea.value.clamp(0.0, 0.25).toDouble(),
+        PortraitDanmakuMode.reduced => controller.danmakuArea.value.clamp(0.0, 0.50).toDouble(),
+        _ => controller.danmakuArea.value,
+      };
       return FlameBarrageWidget(
         controller: controller.danmakuController,
         // Video gestures own the full surface and forward only hits on actual
@@ -679,7 +692,7 @@ class DanmakuViewer extends StatelessWidget {
           emitInterval: 0.05,
           fontSize: controller.danmakuFontSize.value,
           topAreaDistance: controller.danmakuTopArea.value,
-          area: controller.danmakuArea.value,
+          area: effectiveArea,
           bottomAreaDistance: controller.danmakuBottomArea.value,
           baseSpeed: controller.danmakuSpeed.value,
           opacity: controller.danmakuOpacity.value,

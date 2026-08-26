@@ -41,4 +41,52 @@ void main() {
     expect(history.first.roomId, '54');
     expect(history.last.roomId, '5');
   });
+
+  test('history limit supports a finite custom value or unlimited retention', () {
+    expect(normalizeHistoryLimit(0), unlimitedHistoryLimit);
+    expect(normalizeHistoryLimit(120), 120);
+    expect(normalizeHistoryLimit(999999), 999999);
+    expect(normalizeHistoryLimit(-1), defaultHistoryLimit);
+
+    var history = <LiveRoom>[];
+    for (var index = 0; index < 5; index++) {
+      history = upsertHistoryRoom(
+        history,
+        LiveRoom(roomId: '$index', platform: 'test'),
+        watchedAt: index,
+        limit: 3,
+      );
+    }
+    expect(history.map((room) => room.roomId), ['4', '3', '2']);
+
+    for (var index = 5; index < 650; index++) {
+      history = upsertHistoryRoom(
+        history,
+        LiveRoom(roomId: '$index', platform: 'test'),
+        watchedAt: index,
+        limit: unlimitedHistoryLimit,
+      );
+    }
+    expect(history, hasLength(648));
+  });
+
+  test('history backup extraction preserves and enforces the configured limit', () {
+    final rooms = List.generate(4, (index) => LiveRoom(roomId: '$index', platform: 'test').toJson());
+    final extracted = HistoryController.extractConfig({
+      'history': {'historyLimit': 2, 'historyRooms': rooms},
+    });
+
+    expect(extracted['historyLimit'], 2);
+    expect(extracted['historyRooms'], hasLength(2));
+  });
+
+  test('unlimited backup extraction preserves every history entry', () {
+    final rooms = List.generate(620, (index) => LiveRoom(roomId: '$index', platform: 'test').toJson());
+    final extracted = HistoryController.extractConfig({
+      'history': {'historyLimit': unlimitedHistoryLimit, 'historyRooms': rooms},
+    });
+
+    expect(extracted['historyLimit'], unlimitedHistoryLimit);
+    expect(extracted['historyRooms'], hasLength(620));
+  });
 }

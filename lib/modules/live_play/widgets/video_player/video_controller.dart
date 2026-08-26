@@ -15,6 +15,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:pure_live/player/core/player_manager.dart';
+import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:scrollview_observer/scrollview_observer.dart';
 import 'package:pure_live/player/models/player_exception.dart';
 import 'package:pure_live/player/models/player_error_type.dart';
@@ -980,7 +981,7 @@ class VideoController with ChangeNotifier implements DanmakuSettingsBinding {
     // landScape there issued a second setFullScreen(true) while the first
     // native transition was still running, producing inconsistent work-area
     // bounds on Windows systems with a side taskbar.
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (PlatformUtils.isMobile) {
       if (_playerManager.isVerticalVideo.value) {
         await WindowService().verticalScreen();
       } else {

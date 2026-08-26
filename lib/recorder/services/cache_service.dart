@@ -1,11 +1,11 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:pure_live/common/global/app_path_manager.dart';
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/common/utils/hive_pref_util.dart';
 import 'package:pure_live/recorder/consts/recorder_keys.dart';
 import 'package:pure_live/recorder/services/path_helper.dart';
+import 'package:pure_live/common/global/app_path_manager.dart';
 
 typedef RecorderConfiguredPathResolver = String? Function();
 typedef RecorderDefaultDirectoryResolver = Future<Directory> Function();
@@ -40,7 +40,7 @@ class CacheService extends GetxService {
     final configuredPath = _configuredPathResolver()?.trim() ?? '';
     final Directory recordDir;
 
-    if (configuredPath.isEmpty || _samePath(configuredPath, defaultDir.path)) {
+    if (configuredPath.isEmpty || _samePath(configuredPath, defaultDir.path) || isAndroidPrivatePath(configuredPath)) {
       recordDir = defaultDir;
     } else if (p.basename(p.normalize(configuredPath)).toLowerCase() == managedFolderName.toLowerCase() &&
         await File(p.join(configuredPath, ownershipMarkerName)).exists()) {
@@ -153,6 +153,15 @@ class CacheService extends GetxService {
     }
   }
 
+  static bool isAndroidPrivatePath(String path, {bool? androidPlatform}) {
+    if (!(androidPlatform ?? Platform.isAndroid)) return false;
+
+    final normalized = p.normalize(path).replaceAll('\\', '/').toLowerCase();
+
+    return RegExp(r'^/data/(?:user|user_de)/\d+(?:/|$)').hasMatch(normalized) ||
+        RegExp(r'^/data/data(?:/|$)').hasMatch(normalized);
+  }
+
   Future<String> getDisplayPath() async => (await getRecordDir()).path;
 
   Future<Directory> createRoomDir(String roomId) async {
@@ -173,8 +182,8 @@ class CacheService extends GetxService {
         '${now.hour.toString().padLeft(2, '0')}-'
         '${now.minute.toString().padLeft(2, '0')}-'
         '${now.second.toString().padLeft(2, '0')}';
-    final safePlatform = usePinyinForFolder ? PathHelper.toSafePinyin(platform) : platform;
-    final safeNick = usePinyinForFolder ? PathHelper.toSafePinyin(nick) : nick;
+    final safePlatform = usePinyinForFolder ? PathHelper.toSafePinyin(platform) : PathHelper.toSafeComponent(platform);
+    final safeNick = usePinyinForFolder ? PathHelper.toSafePinyin(nick) : PathHelper.toSafeComponent(nick);
     final dir = Directory(p.join(base.path, safePlatform, safeNick, date, time));
     await dir.create(recursive: true);
     return dir;

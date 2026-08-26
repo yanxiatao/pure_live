@@ -14,13 +14,12 @@ import 'package:pure_live/player/utils/fijk_helper.dart';
 import 'package:pure_live/player/models/player_engine.dart';
 import 'package:pure_live/player/interface/fijk_player_accessor.dart';
 
-class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor, VideoFitAwarePlayer {
+class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor {
   late final FijkPlayer _player;
 
   bool _initialized = false;
   bool _disposed = false;
   bool _isAudioOnly = false;
-  BoxFit _videoFit = BoxFit.contain;
   VoidCallback? _playerListener;
 
   final _stateSubject = BehaviorSubject<PlayerState>.seeded(PlayerState.idle);
@@ -73,7 +72,7 @@ class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor, VideoFitAwarePla
       if (value.size != null) {
         final w = value.size!.width.toInt();
         final h = value.size!.height.toInt();
-        if (_widthSubject.value != w) {
+        if (_widthSubject.value != w || _heightSubject.value != h) {
           _widthSubject.add(w);
           _heightSubject.add(h);
         }
@@ -178,24 +177,18 @@ class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor, VideoFitAwarePla
   }
 
   @override
-  Widget getVideoWidget() {
+  Widget getVideoWidget(BoxFit boxfit) {
     if (_isAudioOnly) {
       return const SizedBox.shrink();
     }
     return FijkView(
       player: _player,
-      fit: FijkHelper.getIjkBoxFit(_videoFit),
       fs: false,
       color: Colors.black,
       panelBuilder: (FijkPlayer fijkPlayer, FijkData fijkData, BuildContext context, Size viewSize, Rect texturePos) {
         return const SizedBox();
       },
     );
-  }
-
-  @override
-  void setVideoFit(BoxFit fit) {
-    _videoFit = fit;
   }
 
   @override

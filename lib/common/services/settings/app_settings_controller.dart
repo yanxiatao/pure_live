@@ -7,7 +7,13 @@ import 'package:pure_live/common/utils/hive_pref_util.dart';
 
 class AppSettingsController extends GetxController {
   static const int maxSleepMinutes = 525600;
-  static const List<String> defaultRealOnlinePlatforms = ['douyin', 'kuaishou', 'cc', 'twitch', 'soop'];
+  static const List<String> defaultRealOnlinePlatforms = [
+    Sites.douyinSite,
+    Sites.kuaishouSite,
+    Sites.ccSite,
+    Sites.twitchSite,
+    Sites.soopSite,
+  ];
 
   Worker? _refreshRateModeWorker;
 
@@ -34,9 +40,7 @@ class AppSettingsController extends GetxController {
   final RxBool enableAsmrSleepMode = hiveBool('enableAsmrSleepMode', false);
   final RxInt asmrSleepMinutes = hiveInt('asmrSleepMinutes', 60);
   final RxBool enableRotateScreen = hiveBool('enableRotateScreen', false);
-
   final RxBool enableScreenKeepOn = hiveBool('enableScreenKeepOn', true);
-
   final RxBool enableAutoCheckUpdate = hiveBool('enableAutoCheckUpdate', true);
   final RxBool useGitHubOriginForUpdates = hiveBool('useGitHubOriginForUpdates', false);
   final RxBool enableFullScreenDefault = hiveBool('enableFullScreenDefault', false);
@@ -45,6 +49,11 @@ class AppSettingsController extends GetxController {
   final RxBool preferRealOnlineCounts = hiveBool('preferRealOnlineCounts', false);
   late final RxList<String> realOnlinePlatforms = hiveStringList('realOnlinePlatforms', defaultRealOnlinePlatforms);
   final RxInt audienceMetricMigration = hiveInt('audienceMetricMigration', 0);
+  // These entry points existed before they became configurable upstream.
+  // Defaulting missing keys to true keeps upgrades feature-compatible while
+  // still allowing users to hide either entry explicitly.
+  final RxBool enableMultiView = hiveBool('enableMultiView', true);
+  final RxBool enableNewWindowPlay = hiveBool('enableNewWindowPlay', true);
 
   AppRefreshRateMode get refreshRateMode => AppRefreshRateMode.parse(refreshRateModeName.v);
 
@@ -66,13 +75,15 @@ class AppSettingsController extends GetxController {
       audienceMetricMigration.v = 2;
     }
     _removeUnsupportedOnlinePlatforms();
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isWindows) {
       // Persist the migrated value once so later upgrades no longer depend on
       // the legacy boolean. Existing `true` maps to balanced; a fresh install
       // starts in power-saving mode.
       if (!HivePrefUtil.containsKey('refreshRateMode')) {
         unawaited(HivePrefUtil.setString('refreshRateMode', refreshRateMode.storageValue));
       }
+    }
+    if (Platform.isAndroid) {
       AdaptiveRefreshRateController.setMode(refreshRateMode);
       _refreshRateModeWorker = ever<String>(
         refreshRateModeName,
@@ -152,11 +163,12 @@ class AppSettingsController extends GetxController {
       'enableFullScreenDefault': enableFullScreenDefault.v,
       'showSplashPage': showSplashPage.v,
       'refreshRateMode': refreshRateMode.storageValue,
-      // Kept for restoring this backup into older Pure Live builds.
       'enableHighRefreshRate': refreshRateMode != AppRefreshRateMode.powerSaving,
       'preferRealOnlineCounts': preferRealOnlineCounts.v,
       'realOnlinePlatforms': realOnlinePlatforms.v,
       'savedMenuIds': savedMenuIds.v,
+      'enableMultiView': enableMultiView.v,
+      'enableNewWindowPlay': enableNewWindowPlay.v,
     };
   }
 
@@ -177,6 +189,8 @@ class AppSettingsController extends GetxController {
     realOnlinePlatforms.v = List<String>.from(json['realOnlinePlatforms'] ?? defaultRealOnlinePlatforms);
     _removeUnsupportedOnlinePlatforms();
     savedMenuIds.v = List<String>.from(json['savedMenuIds'] ?? HomeMenu.values.map((e) => e.id).toList());
+    enableMultiView.v = json['enableMultiView'] ?? true;
+    enableNewWindowPlay.v = json['enableNewWindowPlay'] ?? true;
   }
 
   static Map<String, dynamic> extractConfig(Map<String, dynamic>? rootConfig) {
@@ -200,6 +214,8 @@ class AppSettingsController extends GetxController {
         List<String>.from(app['realOnlinePlatforms'] ?? defaultRealOnlinePlatforms),
       ),
       'savedMenuIds': List<String>.from(app['savedMenuIds'] ?? []),
+      'enableMultiView': app['enableMultiView'] ?? true,
+      'enableNewWindowPlay': app['enableNewWindowPlay'] ?? true,
     };
   }
 

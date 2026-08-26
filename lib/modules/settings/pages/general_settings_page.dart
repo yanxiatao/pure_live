@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/common/index.dart';
 import 'package:stop_watch_timer/stop_watch_timer.dart';
-import 'package:pure_live/modules/settings/pages/audience_metric_settings_page.dart';
 
 class GeneralSettingsPage extends GetView<SettingsService> {
   const GeneralSettingsPage({super.key});
@@ -18,7 +17,7 @@ class GeneralSettingsPage extends GetView<SettingsService> {
         children: [
           context.buildGroupTitle(i18n("general")),
           context.buildModernCard([
-            if (Platform.isAndroid)
+            if (Platform.isAndroid || Platform.isWindows)
               Obx(() {
                 final info = DisplayModeService.info.value;
                 final mode = SettingsService.to.app.refreshRateMode;
@@ -51,13 +50,13 @@ class GeneralSettingsPage extends GetView<SettingsService> {
                   onTap: () => DisplayModeService.refreshInfo(),
                 );
               }),
-            context.buildTile(
-              title: i18n('audience_metric_settings'),
-              subtitle: i18n('audience_metric_settings_desc'),
-              icon: Icons.groups_2_rounded,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Get.to(() => const AudienceMetricSettingsPage()),
-            ),
+            if (Platform.isWindows)
+              context.buildSwitchTile(
+                title: i18n('open_new_window'),
+                subtitle: i18n("open_new_window_subtitle"),
+                value: SettingsService.to.app.enableNewWindowPlay,
+                icon: Icons.add_to_photos_outlined,
+              ),
             context.buildSwitchTile(
               title: i18n('splash_animation'),
               subtitle: i18n("splash_animation_subtitle"),

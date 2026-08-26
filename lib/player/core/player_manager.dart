@@ -30,6 +30,7 @@ import 'package:pure_live/player/utils/player_consts.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/player/utils/pip_window_widget.dart';
 import 'package:pure_live/player/core/live_audio_service.dart';
+import 'package:pure_live/player/adapters/media_kit_adapter.dart';
 import 'package:pure_live/common/utils/latest_async_value_queue.dart';
 import 'package:pure_live/player/adapters/player_adapter_factory.dart';
 import 'package:pure_live/modules/live_play/controllers/player_state.dart';
@@ -54,7 +55,6 @@ class PlayerManager {
   Future<void> _playerLifecycleQueue = Future.value();
   int _sessionId = 0;
   bool _isClosing = false;
-  Future<void>? _closeFuture;
 
   PlayerManager({
     required this.fallbackManager,
@@ -134,6 +134,8 @@ class PlayerManager {
   bool _isHandlingError = false;
   static const String _floatTag = "global_video_player";
   Timer? _hideTimer;
+  Timer? _geometryObservationTimer;
+  Timer? _geometryStabilityTimer;
   late Floating floating;
   LiveRoom? currentFloatRoom;
   VideoController? _videoController;
@@ -292,11 +294,15 @@ class PlayerManager {
     fallbackTimer.cancel();
   }
 
-  double get currentVideoRatio {
-    final w = _widthSubject.value?.toDouble() ?? 1920;
-    final h = _heightSubject.value?.toDouble() ?? 1080;
-    if (w <= 0 || h <= 0) return 16 / 9;
-    return w / h;
+  double get rawVideoAspectRatio {
+    final width = _widthSubject.value;
+    final height = _heightSubject.value;
+
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return 16 / 9;
+    }
+
+    return width / height;
   }
 
   Future<UnifiedPlayer> _createPlayer(PlayerEngine engine, {bool audioOnly = false}) async {
@@ -307,11 +313,8 @@ class PlayerManager {
 
   Future<T> _enqueuePlayerLifecycle<T>(Future<T> Function() operation) {
     final previous = _playerLifecycleQueue;
-
     final current = previous.then((_) => operation());
-
     _playerLifecycleQueue = current.then<void>((_) {}, onError: (_, _) {});
-
     return current;
   }
 
@@ -409,14 +412,11 @@ class PlayerManager {
     _audioModeVideoWarmTimer?.cancel();
     _audioModeVideoWarmTimer = null;
     isVideoRestorePending.value = false;
-    final closing = _closeFuture;
-    if (closing != null) {
-      await closing;
-    }
-    if (_disposed) return;
+    if (_disposed || _isClosing) return;
     final mySessionId = ++_sessionId;
 
-    if (room?.roomId != currentFloatRoom?.roomId) {
+    final roomChanged = room != currentFloatRoom;
+    if (roomChanged) {
       lineManager.reset();
     }
     if (_currentPlayer == null || _runtimeEngine == null) {
@@ -837,12 +837,6 @@ class PlayerManager {
     final fitList = SettingsService.to.player.videoFitArray;
     if (fitList.isEmpty || index < 0 || index >= fitList.length) return;
     videoFitIndex.value = index;
-    _applyVideoFit(_currentPlayer, fitList[index]);
-  }
-
-  void _applyVideoFit(UnifiedPlayer? player, BoxFit fit) {
-    if (player is! VideoFitAwarePlayer) return;
-    (player as VideoFitAwarePlayer).setVideoFit(fit);
   }
 
   Future<void> enablePip() async {
@@ -861,7 +855,14 @@ class PlayerManager {
         isPipPreparing.value = true;
         await SchedulerBinding.instance.endOfFrame;
 
-        final rational = isVerticalVideo.value ? const Rational.vertical() : const Rational.landscape();
+        final videoWidth = _widthSubject.value;
+        final videoHeight = _heightSubject.value;
+
+        if (videoWidth == null || videoHeight == null || videoWidth <= 0 || videoHeight <= 0) {
+          return;
+        }
+
+        final rational = Rational(videoWidth, videoHeight);
         final result = await floating.enable(ImmediatePiP(aspectRatio: rational, sourceRectHint: sourceRectHint));
         if (result == PiPStatus.enabled) isInPip.value = true;
       } finally {
@@ -869,7 +870,7 @@ class PlayerManager {
         _pipTransitionInFlight = false;
       }
     } else if (Platform.isWindows) {
-      await WindowService().enterWinPiP(currentVideoRatio);
+      await WindowService().enterWinPiP(rawVideoAspectRatio);
       isInPip.value = true;
     }
   }
@@ -893,7 +894,6 @@ class PlayerManager {
   Future<void> exitPip() async {
     if (Platform.isWindows) {
       await WindowService().exitWinPiP();
-      GlobalPlayerState.to.reset();
       isInPip.value = false;
     }
   }
@@ -907,7 +907,7 @@ class PlayerManager {
     floatingManager.disposeFloating(_floatTag);
     _hideTimer?.cancel();
     double maxSide = Platform.isWindows ? 350 : 220;
-    double ratio = currentVideoRatio;
+    final ratio = rawVideoAspectRatio;
     double floatWidth;
     double floatHeight;
     if (ratio >= 1) {
@@ -1426,12 +1426,25 @@ class PlayerManager {
   }
 
   Widget _buildVideoWidget(UnifiedPlayer player, BoxFit boxFit) {
-    // Let each native adapter own its fit. Transforming a Windows texture with
-    // FittedBox makes the media_kit output-size guard see the source dimensions
-    // instead of the real viewport, which wastes GPU memory. Waiting for the
-    // dimension streams before mounting also creates a first-frame deadlock.
-    _applyVideoFit(player, boxFit);
-    return player.getVideoWidget();
+    if (currentEngine is MediaKitAdapter) {
+      return player.getVideoWidget(boxFit);
+    }
+    return StreamBuilder<List<int?>>(
+      stream: CombineLatestStream.list([width, height]),
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        if (data == null || data.length < 2 || data[0] == null || data[1] == null || data[0]! <= 0 || data[1]! <= 0) {
+          return const SizedBox.shrink();
+        }
+        final videoWidth = data[0]!.toDouble();
+        final videoHeight = data[1]!.toDouble();
+        return FittedBox(
+          fit: boxFit,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(width: videoWidth, height: videoHeight, child: player.getVideoWidget(boxFit)),
+        );
+      },
+    );
   }
 
   Widget _buildPlaceholder() {
@@ -1501,14 +1514,12 @@ class PlayerManager {
     isInitialized.value = false;
   }
 
-  Future<void> retry() async {
-    await _playInternal(
-      _currentUrl!,
-      _currentPlayUrls,
-      _currentHeaders,
-      room: currentFloatRoom,
-      audioOnly: _runtimeAudioOnly,
-    );
+  Future<void> retry() {
+    return _enqueuePlayerLifecycle(() async {
+      final url = _currentUrl;
+      if (url == null) return;
+      await _playInternal(url, _currentPlayUrls, _currentHeaders, room: currentFloatRoom, audioOnly: _runtimeAudioOnly);
+    });
   }
 
   Future<void> _handleError(PlayerException error, {int? sessionId}) async {
@@ -1660,6 +1671,8 @@ class PlayerManager {
     _sessionId++;
     _isClosing = true;
     _hideTimer?.cancel();
+    _geometryObservationTimer?.cancel();
+    _geometryStabilityTimer?.cancel();
     _audioModeVideoWarmTimer?.cancel();
     await closeAppFloating();
     await _pipSubscription?.cancel();

@@ -40,6 +40,13 @@ class FavoritePage extends GetView<FavoriteController> {
   }
 }
 
+@visibleForTesting
+int resolveFavoriteSiteIndex({required List<String> siteIds, required String selectedSiteId, required int fallback}) {
+  if (siteIds.isEmpty) return 0;
+  final selectedIndex = siteIds.indexOf(selectedSiteId);
+  return selectedIndex >= 0 ? selectedIndex : fallback.clamp(0, siteIds.length - 1).toInt();
+}
+
 /// Owns one stable site [TabController] across reactive data publications.
 ///
 /// It also preserves the selected site by id when the configured platform
@@ -65,13 +72,18 @@ class _FavoriteSiteTabsState extends State<_FavoriteSiteTabs> with SingleTickerP
   @override
   void initState() {
     super.initState();
-    final initialIndex = _clampSiteIndex(widget.controller.tabSiteIndex.value, widget.availableSitesList);
+    final initialIndex = resolveFavoriteSiteIndex(
+      siteIds: widget.availableSitesList.map((site) => site.id).toList(growable: false),
+      selectedSiteId: widget.controller.selectedPlatformId,
+      fallback: widget.controller.tabSiteIndex.value,
+    );
     _tabController = TabController(length: widget.availableSitesList.length, initialIndex: initialIndex, vsync: this)
       ..addListener(_handleTabChanged);
     widget.controller.bindActiveScrollController(_scrollControllerFor(widget.availableSitesList[initialIndex].id));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.controller.selectSiteIndex(initialIndex);
+    });
   }
-
-  int _clampSiteIndex(int index, List<Site> sites) => index.clamp(0, sites.length - 1).toInt();
 
   void _handleTabChanged() {
     final tabController = _tabController;

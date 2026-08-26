@@ -176,7 +176,7 @@ def douyu_encryption_probe() -> None:
         raise ValueError("Douyu encryption descriptor is already expired")
 
 
-def douyu_playback_probe() -> None:
+def douyu_playback_probe(room_ids: list[str] | None = None) -> None:
     """Exercise signing, H5 metadata, CDN URL and the actual FLV header."""
     did = secrets.token_hex(16)
     descriptor_payload = request_json(
@@ -187,14 +187,17 @@ def douyu_playback_probe() -> None:
     if not isinstance(descriptor, dict):
         raise ValueError("Douyu encryption payload is missing data")
 
-    recommendation = request_json("https://www.douyu.com/japi/weblist/apinc/allpage/6/1")
-    rooms = recommendation.get("data", {}).get("rl", []) if isinstance(recommendation, dict) else []
-    if not isinstance(rooms, list) or not rooms:
-        raise ValueError("Douyu recommendation returned no rooms")
+    if room_ids is None:
+        recommendation = request_json("https://www.douyu.com/japi/weblist/apinc/allpage/6/1")
+        rooms = recommendation.get("data", {}).get("rl", []) if isinstance(recommendation, dict) else []
+        if not isinstance(rooms, list) or not rooms:
+            raise ValueError("Douyu recommendation returned no rooms")
+        candidate_ids = [str(room.get("rid", "")).strip() for room in rooms[:10] if isinstance(room, dict)]
+    else:
+        candidate_ids = [str(room_id).strip() for room_id in room_ids]
 
     errors: list[str] = []
-    for room in rooms[:10]:
-        room_id = str(room.get("rid", "")).strip() if isinstance(room, dict) else ""
+    for room_id in candidate_ids:
         if not room_id:
             continue
         try:
@@ -265,6 +268,18 @@ def douyu_playback_probe() -> None:
         except Exception as error:  # noqa: BLE001 - try another active room
             errors.append(f"{room_id}: {error}")
     raise ValueError("; ".join(errors[-3:]) or "no usable Douyu room")
+
+
+def douyu_reported_room_probe() -> None:
+    """Recheck the concrete room reported by upstream issue #799."""
+    room_id = "71415"
+    payload = request_json(f"https://www.douyu.com/betard/{room_id}")
+    room = payload.get("room") if isinstance(payload, dict) else None
+    if not isinstance(room, dict) or str(room.get("room_id", "")) != room_id:
+        raise ValueError("reported Douyu room metadata is missing")
+    if int(room.get("show_status", 0)) != 1 or int(room.get("videoLoop", 0)) == 1:
+        return
+    douyu_playback_probe([room_id])
 
 
 def douyu_search_probe() -> None:
@@ -365,17 +380,17 @@ def yy_playback_probe() -> None:
             "head": {
                 "seq": sequence,
                 "appidstr": "0",
-                "bidstr": "123",
+                "bidstr": "121",
                 "cidstr": room_id,
                 "sidstr": room_id,
                 "uid64": 0,
                 "client_type": 108,
-                "client_ver": "5.19.4",
+                "client_ver": "5.23.0-beta.2",
                 "stream_sys_ver": 1,
                 "app": "yylive_web",
-                "playersdk_ver": "5.19.4",
+                "playersdk_ver": "5.23.0-beta.2",
                 "thundersdk_ver": "0",
-                "streamsdk_ver": "5.19.4",
+                "streamsdk_ver": "5.23.0-beta.2",
             },
             "client_attribute": {
                 "client": "web",
@@ -402,7 +417,7 @@ def yy_playback_probe() -> None:
             },
         },
         headers={
-            "Content-Type": "application/json",
+            "Content-Type": "text/plain;charset=UTF-8",
             "Origin": "https://www.yy.com",
             "Referer": f"https://www.yy.com/{room_id}",
         },
@@ -416,6 +431,42 @@ def yy_playback_probe() -> None:
         for value in lines.values()
     ):
         raise ValueError("YY playback lines missing")
+
+
+def yy_restricted_room_fallback_probe() -> None:
+    """Exercise the anonymous HLS fallback for upstream issue #798."""
+    room_id = "1382736873"
+    response = urllib.request.urlopen(
+        urllib.request.Request(
+            f"https://interface.yy.com/hls/new/get/{room_id}/{room_id}/4000?source=wapyy&callback=",
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"
+                ),
+                "Referer": f"https://wap.yy.com/mobileweb/{room_id}/{room_id}",
+                "Connection": "close",
+            },
+        ),
+        timeout=20,
+    )
+    payload = response.read().decode("utf-8", errors="replace").strip()
+    json_start = payload.find("{")
+    json_end = payload.rfind("}")
+    if json_start < 0 or json_end < json_start:
+        raise ValueError("YY fallback returned no JSON object")
+    data = json.loads(payload[json_start : json_end + 1])
+    stream_url = str(data.get("hls", "")).strip() if isinstance(data, dict) else ""
+    if data.get("code") != 0 or not stream_url.startswith("https://"):
+        raise ValueError("YY fallback stream URL missing")
+    stream_request = urllib.request.Request(
+        stream_url,
+        headers={"User-Agent": USER_AGENT, "Referer": "https://wap.yy.com/", "Connection": "close"},
+    )
+    with urllib.request.urlopen(stream_request, timeout=20) as stream_response:
+        prefix = stream_response.read(16)
+    if not prefix.startswith(b"#EXTM3U"):
+        raise ValueError(f"YY fallback returned a non-HLS prefix: {prefix!r}")
 
 
 def kuaishou_playback_probe() -> None:
@@ -482,29 +533,50 @@ def douyin_search_probe() -> None:
     cookie_jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
 
-    def get_json(url: str, params: dict[str, object]) -> object:
-        request = urllib.request.Request(
-            f"{url}?{urllib.parse.urlencode(params)}",
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json,text/plain,*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Referer": "https://live.douyin.com/",
-                "Connection": "close",
-            },
-        )
-        with opener.open(request, timeout=20) as response:
-            payload = response.read()
-        if not payload.strip():
-            raise ValueError("empty response body")
-        return json.loads(payload.decode("utf-8", errors="replace").lstrip("\ufeff"))
+    def get_json(url: str, params: dict[str, object], attempts: int = 3) -> object:
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                request = urllib.request.Request(
+                    f"{url}?{urllib.parse.urlencode(params)}",
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "application/json,text/plain,*/*",
+                        "Accept-Language": "zh-CN,zh;q=0.9",
+                        "Referer": "https://live.douyin.com/",
+                        "Cache-Control": "no-cache",
+                        "Connection": "close",
+                    },
+                )
+                with opener.open(request, timeout=20) as response:
+                    payload = response.read()
+                if not payload.strip():
+                    raise ValueError("empty response body")
+                return json.loads(payload.decode("utf-8", errors="replace").lstrip("\ufeff"))
+            except Exception as error:  # noqa: BLE001 - bounded transient retry
+                last_error = error
+                if attempt < attempts:
+                    time.sleep(attempt)
+        assert last_error is not None
+        raise last_error
 
-    home_request = urllib.request.Request(
-        "https://live.douyin.com/?from_nav=1",
-        headers={"User-Agent": USER_AGENT, "Connection": "close"},
-    )
-    with opener.open(home_request, timeout=20) as response:
-        response.read(1)
+    last_home_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            home_request = urllib.request.Request(
+                "https://live.douyin.com/?from_nav=1",
+                headers={"User-Agent": USER_AGENT, "Cache-Control": "no-cache", "Connection": "close"},
+            )
+            with opener.open(home_request, timeout=20) as response:
+                response.read(1)
+            break
+        except Exception as error:  # noqa: BLE001 - bounded transient retry
+            last_home_error = error
+            if attempt < 3:
+                time.sleep(attempt)
+    else:
+        assert last_home_error is not None
+        raise last_home_error
     if not any(cookie.name == "ttwid" for cookie in cookie_jar):
         raise ValueError("anonymous ttwid cookie missing")
 
@@ -1262,6 +1334,7 @@ def main() -> int:
         ("douyu.recommend", douyu_recommend_probe),
         ("douyu.encryption", douyu_encryption_probe),
         ("douyu.playback", douyu_playback_probe),
+        ("douyu.reported_room_799", douyu_reported_room_probe),
         (
             "huya.categories",
             lambda: require_path(
@@ -1358,6 +1431,7 @@ def main() -> int:
         ("yy.anchor_search", yy_anchor_search_probe),
         ("yy.room", yy_room_probe),
         ("yy.playback", yy_playback_probe),
+        ("yy.restricted_room_fallback", yy_restricted_room_fallback_probe),
     ]
 
     failures: list[str] = []
