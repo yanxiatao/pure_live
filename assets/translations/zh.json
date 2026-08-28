@@ -71,6 +71,7 @@
     "copied_to_clipboard": "已复制到剪贴板",
     "copy_link": "复制链接",
     "count_wan": "万",
+    "count_k": "k",
     "create_backup": "创建备份",
     "create_backup_failed": "创建备份失败",
     "create_backup_subtitle": "可用于恢复当前数据",
@@ -1475,5 +1476,7 @@
     "portrait_custom_height_setting": "调整视频显示的像素高度",
     "portrait_reset_video_height": "重置竖屏视频高度",
     "portrait_reset_video_height_desc": "恢复为自适应模式并重置自定义高度",
-    "portrait_height_presets": "预设高度"
+    "portrait_height_presets": "预设高度",
+    "unknown": "未知",
+    "import_epg_source": "导入节目单"
 }

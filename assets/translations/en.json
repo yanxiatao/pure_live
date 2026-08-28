@@ -71,6 +71,7 @@
     "cookie": "Cookie",
     "copied_to_clipboard": "Copied to clipboard",
     "count_k": "k",
+    "count_wan": "万",
     "create_backup": "Backup",
     "create_backup_failed": "Create backup failed",
     "create_backup_subtitle": "Used to recover from current",
@@ -1476,5 +1477,7 @@
     "quality_limited_to": "The platform returned {quality}; playback now matches the actual quality",
     "quality_stream_unchanged": "The platform returned the current stream for that option, so the current quality was kept",
     "audience_ranking_rule_desc": "Ranking order: explicit concurrent counts first, supported rooms awaiting data next, then heat or cumulative metrics. Equal values use stable platform and room IDs to prevent refresh reshuffling.",
-    "audience_yy_detail": "The public users field is platform heat; the current web API does not expose a separate concurrent count"
+    "audience_yy_detail": "The public users field is platform heat; the current web API does not expose a separate concurrent count",
+    "unknown": "Unknown",
+    "import_epg_source": "Import EPG source"
 }
