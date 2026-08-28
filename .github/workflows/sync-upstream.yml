@@ -1,10 +1,13 @@
 name: Sync upstream and release
 
-# 定时检测上游 liuchuancong/pure_live 的更新：
-# - 合并策略：专有功能路径（multiview/Cookie 增强/弹幕代理/Twitch 反代等）
-#   冲突时保留本 fork 侧，其余代码一律以上游为准；
-# - 合并后先过质量门禁（Analyze + multiview 测试），通过才推送并发 Release；
-# - 门禁失败或存在无法自动解决的冲突：重置回远程状态并开 issue 人工处理。
+# 定时检测上游 liuchuancong/pure_live 的更新，并把本仓库的合并策略自动化：
+# - 分层解决冲突：fork 专有功能保留本侧，其余取上游；版本号与下载/更新源等身份
+#   字段由 tool/apply_fork_identity.py 在合并后重新固定（不整文件保留
+#   assets/version.json，否则会永久锁死旧版本号并丢掉上游修正）；
+# - 无法确信分类的路径（例如上游删除了本 fork 改过的文件）一律中止并开 issue，
+#   绝不猜测，也绝不在决策前 git add（旧实现因此把冲突标记提交进过 master）；
+# - 必须通过 tool/validate_fork_identity.py、Analyze 与全量测试才推送 master 并
+#   派发 Release；任一步失败都不推送。
 # 注意：GitHub 会在仓库 60 天无活动后停用定时触发，届时在 Actions 页手动重新启用即可。
 
 on:
@@ -12,6 +15,12 @@ on:
     # 每天 UTC 18:00（北京时间次日 02:00）
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      allow_unknown_theirs:
+        description: 上游删除/本 fork 删除等未知冲突也接受上游（结果标记为待复核）
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,28 +32,20 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # 专有功能路径：冲突时保留本 fork 侧，不接受上游覆盖。
-  # 维护新增专有功能时同步维护此清单。
-  PROPRIETARY_PATHS: >-
-    lib/modules/multiview
-    lib/modules/account
-    lib/plugins/fjs_engine.dart
-    lib/core/common/web_socket_util.dart
-    lib/core/site/twitch
-    lib/common/services/settings/cookie_settings_controller.dart
-    lib/common/services/settings/proxy_settings_controller.dart
-    lib/player/adapters/media_kit_adapter.dart
-    lib/modules/live_play/controllers/player_controller.dart
-    test/multiview_test.dart
-    .github/workflows/sync-upstream.yml
-    .github/workflows/build_pure_live_release.yml
-    README.md
-    assets/version.json
+  # 与 .fvmrc 保持一致；归档地址与哈希随版本一起更新（与 Release 工作流同一做法）。
+  FLUTTER_VERSION: 3.47.0
+  FLUTTER_LINUX_ARCHIVE: stable/linux/flutter_linux_3.47.0-stable.tar.xz
+  FLUTTER_LINUX_SHA256: 26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296
+  # 与 tool/flutterw.ps1 一致：CI 与本机解析出同一批版本，夜间也不会把锁文件的
+  # hosted 源改回 pub.dev 而导致本地 --enforce-lockfile 失败。
+  PUB_HOSTED_URL: https://mirrors.cloud.tencent.com/dart-pub/
+  EVIDENCE_DIR: local-artifacts/sync-upstream
 
 jobs:
   sync:
     name: Sync upstream master
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout fork master
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,107 +53,124 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      - name: Fetch upstream
+      - name: Freeze upstream and origin tips
+        id: plan
         run: |
-          git remote add upstream https://github.com/liuchuancong/pure_live.git
-          git fetch upstream master
-
-      - name: Check for upstream updates
-        id: check
-        run: |
-          count=$(git rev-list --count HEAD..upstream/master)
-          echo "upstream new commits: $count"
+          set -euo pipefail
+          git remote get-url upstream >/dev/null 2>&1 \
+            && git remote set-url upstream https://github.com/liuchuancong/pure_live.git \
+            || git remote add upstream https://github.com/liuchuancong/pure_live.git
+          # --no-tags：否则上游的 v3.0.5/v3.0.7 会落进本地 refs/tags，使“本 fork
+          # 是否已发布该 tag”的判断永久为真，从此不再派发 Release。
+          git fetch --no-tags --prune upstream master
+          git fetch --no-tags --prune origin master
+          upstream_sha=$(git rev-parse upstream/master)
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "merge_base=$(git merge-base HEAD "$upstream_sha")" >> "$GITHUB_OUTPUT"
+          echo "base_master=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          count=$(git rev-list --count "HEAD..$upstream_sha")
           echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "incoming commits: $count"
 
-      - name: Configure git identity
+      - name: Merge upstream (tiered, never guesses)
+        id: merge
+        if: steps.plan.outputs.count != '0'
         run: |
+          set -uo pipefail
+          mkdir -p "$EVIDENCE_DIR"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Merge upstream (proprietary-aware)
-        id: merge
-        if: steps.check.outputs.count != '0'
-        run: |
-          if git merge upstream/master --no-edit; then
-            echo "merged=clean" >> "$GITHUB_OUTPUT"
+          extra=""
+          if [ "${{ inputs.allow_unknown_theirs }}" = "true" ]; then extra="--allow-unknown-theirs"; fi
+          git merge --no-ff --no-commit "${{ steps.plan.outputs.upstream_sha }}" || true
+          python tool/merge_upstream.py \
+            --base "${{ steps.plan.outputs.merge_base }}" \
+            --upstream "${{ steps.plan.outputs.upstream_sha }}" \
+            --report "$EVIDENCE_DIR/merge-decisions.json" $extra
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            git commit --no-edit -m "chore(upstream): 合并 ${{ steps.plan.outputs.upstream_sha }}"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
           else
-            # 两层冲突解法：
-            # 1. 专有功能路径保留本 fork 侧（不接受上游覆盖）；
-            # 2. 其余冲突全部以上游为准。
-            for p in $PROPRIETARY_PATHS; do
-              git checkout --ours -- "$p" 2>/dev/null || true
-            done
-            git add -A
-            if git diff --name-only --diff-filter=U | grep -q .; then
-              git checkout --theirs -- . 2>/dev/null || true
-              git add -A
-            fi
-            if git diff --name-only --diff-filter=U | grep -q .; then
-              git merge --abort || true
-              git status
-              echo "merged=false" >> "$GITHUB_OUTPUT"
-            else
-              git commit --no-edit
-              echo "merged=resolved" >> "$GITHUB_OUTPUT"
-            fi
+            git merge --abort || true
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            echo "exit=$rc" >> "$GITHUB_OUTPUT"
+            echo "merge aborted (rc=$rc); master untouched"
           fi
 
-      - name: Create conflict issue
-        if: steps.check.outputs.count != '0' && steps.merge.outputs.merged == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Install pinned Flutter SDK from the official archive
+        if: steps.merge.outputs.merged == 'true'
         run: |
-          existing=$(gh issue list --state open --search "上游同步冲突 in:title" --json number --jq 'length')
-          if [ "$existing" = "0" ]; then
-            gh issue create \
-              --title "上游同步冲突：需要手动合并" \
-              --body "自动同步检测到上游 liuchuancong/pure_live 的更新与本仓库存在合并冲突，已中止合并（master 未受影响）。请本地执行 \`git remote add upstream https://github.com/liuchuancong/pure_live.git && git fetch upstream && git merge upstream/master\` 手动解决冲突后推送。"
-          else
-            echo "conflict issue already open, skip"
-          fi
+          set -euo pipefail
+          test "$(jq -r .flutter .fvmrc)" = "$FLUTTER_VERSION" || {
+            echo ".fvmrc ($(jq -r .flutter .fvmrc)) and FLUTTER_VERSION ($FLUTTER_VERSION) disagree"; exit 1;
+          }
+          archive="$RUNNER_TEMP/flutter-linux.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://storage.googleapis.com/flutter_infra_release/releases/$FLUTTER_LINUX_ARCHIVE" \
+            --output "$archive"
+          echo "$FLUTTER_LINUX_SHA256  $archive" | sha256sum --check --strict
+          tar --extract --file "$archive" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
 
-      - name: Setup Flutter
-        if: steps.merge.outputs.merged != 'false'
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version-file: .fvmrc
-          cache: true
-
-      # 合并带入上游依赖与代码风格变更后，自动修复两类高频门禁失败：
-      # 1. pubspec.lock 与合并后 pubspec.yaml 失配 → 重新解析生成 lock；
-      # 2. 上游 Dart 文件格式与本仓库 dart format 规范不一致 → 统一格式化。
-      - name: Auto-fix lockfile and formatting
-        if: steps.merge.outputs.merged != 'false'
+      # 上游若改了 pubspec.yaml，锁文件要先重新解析；随后才由身份重写把 hosted 源
+      # 固定回本 fork 使用的镜像，避免夜间把锁文件在 pub.dev 与镜像之间来回翻转。
+      - name: Resolve dependencies
+        if: steps.merge.outputs.merged == 'true'
         run: |
+          set -euo pipefail
+          flutter --version
           flutter pub get
-          files=$(git diff --name-only --diff-filter=ACMR HEAD -- '*.dart' | grep -v 'lib/core/scripts/douyin_sign.dart' || true)
-          if [ -n "$files" ]; then
-            dart format $files
-            git add -A
-            git commit --no-edit || true
+
+      - name: Re-assert fork release identity
+        id: identity
+        if: steps.merge.outputs.merged == 'true'
+        run: |
+          set -euo pipefail
+          python tool/apply_fork_identity.py --write --report "$EVIDENCE_DIR/identity-apply.json"
+          python tool/apply_fork_identity.py --check
+          if ! git diff --quiet; then
+            git commit -am "chore(identity): 重新固定发布身份并同步锁文件"
           fi
 
-      - name: Quality gate (analyze + multiview tests)
+      - name: Validate fork invariants
+        if: steps.merge.outputs.merged == 'true'
+        run: |
+          set -euo pipefail
+          python tool/validate_fork_identity.py --staged --github-annotations \
+            --output "$EVIDENCE_DIR/fork-identity.json"
+
+      - name: Quality gate (analyze + whole test suite)
         id: gate
-        if: steps.merge.outputs.merged != 'false'
+        if: steps.merge.outputs.merged == 'true'
         run: |
-          flutter pub get
+          set -euo pipefail
           flutter analyze --no-fatal-infos --no-fatal-warnings
-          flutter test test/multiview_test.dart --concurrency=12
+          # 全量而非单个测试文件：v3.0.7 同步里真正暴露问题的，是上游自带断言与
+          # fork 侧 schema 扩展不匹配的两条测试，只跑 multiview 抓不到。
+          flutter test --concurrency=12
 
       - name: Push merged master
         if: steps.gate.outcome == 'success'
-        run: git push origin master
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin master
+          if [ "$(git rev-parse origin/master)" != "${{ steps.plan.outputs.base_master }}" ]; then
+            echo "origin/master moved during this run; refusing to push, rerun the sync"
+            exit 1
+          fi
+          git push origin master
 
       - name: Derive release tag from pubspec
         id: tag
         if: steps.gate.outcome == 'success'
         run: |
-          version=$(grep -Po '(?<=^version: )[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml)
-          tag="v$version"
+          set -euo pipefail
+          tag="v$(grep -Po '(?<=^version: )[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml)"
           echo "derived tag: $tag"
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "tag already exists, skip release dispatch"
+          # 查本仓库远端而不是本地 refs：本地可能带着刚从上游抓来的同名 tag。
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "tag $tag already published on origin, skip release dispatch"
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
           else
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -165,6 +183,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          set -euo pipefail
           gh workflow run build_pure_live_release.yml \
             --repo yanxiatao/pure_live \
             --ref master \
@@ -173,16 +192,52 @@ jobs:
             -f release_tag="$RELEASE_TAG" \
             -f release_sync_note="本 Release 由上游自动同步工作流发出，包含同步 [liuchuancong/pure_live](https://github.com/liuchuancong/pure_live) 上游更新的内容。"
 
-      - name: Report gate failure
-        if: failure() || steps.gate.outcome == 'failure'
+      - name: Upload sync evidence
+        if: always() && steps.plan.outputs.count != '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sync-upstream-evidence
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Report failure
+        if: failure() || steps.merge.outputs.merged == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.plan.outputs.upstream_sha }}
+          MERGE_BASE: ${{ steps.plan.outputs.merge_base }}
+          MERGE_STATE: ${{ steps.merge.outputs.merged }}
+          MERGE_RC: ${{ steps.merge.outputs.exit }}
         run: |
-          existing=$(gh issue list --state open --search "上游同步质量门禁失败 in:title" --json number --jq 'length')
-          if [ "$existing" = "0" ]; then
-            gh issue create \
-              --title "上游同步质量门禁失败：已回滚本次合并" \
-              --body "自动同步的合并已完成，但质量门禁（Analyze + multiview 测试）未通过，master 未推送。请查看 Actions 运行日志定位失败原因并手动处理。"
-          else
-            echo "gate failure issue already open, skip"
+          set -euo pipefail
+          title="上游同步未完成：$UPSTREAM_SHA"
+          if [ -n "$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')" ]; then
+            echo "issue already open for $UPSTREAM_SHA"
+            exit 0
           fi
+          abort_reason='见本次运行的 sync-upstream-evidence artifact'
+          if [ -f "$EVIDENCE_DIR/merge-decisions.json" ]; then
+            abort_reason=$(python3 -c "import json;print(json.load(open('$EVIDENCE_DIR/merge-decisions.json')).get('abort_reason') or '见 artifact')")
+          fi
+          cat > issue_body.md <<EOF
+          自动同步在上游 \`$UPSTREAM_SHA\`（merge base \`$MERGE_BASE\`）处停止，\`master\` 未被推送。
+
+          - 阶段结果：merge=${MERGE_STATE:-not-run} (rc=${MERGE_RC:-n/a})
+          - 分类中止原因：$abort_reason
+          - 逐路径决策与身份重写记录见本次运行的 \`sync-upstream-evidence\` artifact。
+
+          本地复现：
+
+          \`\`\`sh
+          git remote add upstream https://github.com/liuchuancong/pure_live.git
+          git fetch --no-tags upstream master
+          git merge --no-ff --no-commit $UPSTREAM_SHA
+          python tool/merge_upstream.py --base $MERGE_BASE --upstream $UPSTREAM_SHA --report /tmp/merge.json
+          python tool/apply_fork_identity.py --check
+          python tool/validate_fork_identity.py --github-annotations
+          \`\`\`
+
+          若错误结果已被推送，回滚命令：\`git revert -m 1 <merge commit>\`。
+          EOF
+          gh issue create --title "$title" --body-file issue_body.md
