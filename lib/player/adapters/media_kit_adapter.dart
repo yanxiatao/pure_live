@@ -7,6 +7,7 @@ import '../models/player_exception.dart';
 import '../models/player_error_type.dart';
 
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/core/common/log.dart';
 
 import '../interface/unified_player_interface.dart';
 
@@ -37,15 +38,12 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   /// 网络超时、音频驱动、代理、macOS 硬解关闭），避免两处配置漂移。
   static Future<void> applyNativeLiveProperties(dynamic native) async {
     await native.setProperty('force-seekable', 'yes');
-
-    await native.setProperty('protocol_whitelist', 'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto');
+    await native.setProperty(
+      'protocol_whitelist',
+      'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto,rtmp,rtmps,rtsp,srt',
+    );
 
     await native.setProperty('demuxer-lavf-probesize', '2097152');
-
-    // Live FLV/HLS streams need a short probe rather than a long-file
-    // analysis pass.  This reduces the black-screen interval before the
-    // first decoded frame while retaining enough data for codec detection.
-    await native.setProperty('demuxer-lavf-analyzeduration', '2');
 
     // mpv's generic defaults keep a large seek-oriented forward/backward
     // cache. Live rooms are not meaningfully seekable, so retaining that
@@ -59,6 +57,13 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     await native.setProperty('demuxer-readahead-secs', LiveBufferPolicy.readaheadSeconds.toString());
 
     await native.setProperty('network-timeout', '15');
+
+    // Ask mpv to abandon a broken hardware decoder after the first consecutive
+    // frame failure. This preserves the low-power fast path on compatible
+    // devices while making unsupported profiles fall back to software instead
+    // of leaving a black Surface behind. mpv's larger default can skip several
+    // live packets before the fallback is attempted.
+    await native.setProperty('hwdec-software-fallback', '1');
 
     if (SettingsService.to.player.customPlayerOutput.v) {
       await native.setProperty('ao', SettingsService.to.player.audioOutputDriver.v);
@@ -308,6 +313,7 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
         }
       },
       onError: (e, s) {
+        Log.e(e, s);
         _emitError(e, s, PlayerErrorType.native);
       },
     );
@@ -329,6 +335,7 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
         }
       },
       onError: (e, s) {
+        Log.e(e, s);
         _emitError(e, s, PlayerErrorType.native);
       },
     );
@@ -359,6 +366,7 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
         _stateSubject.add(PlayerState.completed);
       },
       onError: (e, s) {
+        Log.e(e, s);
         _emitError(e, s, PlayerErrorType.native);
       },
     );
@@ -444,7 +452,7 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     if (lower.contains('surface') || lower.contains('texture')) {
       return PlayerErrorType.texture;
     }
-
+    Log.d(error);
     return PlayerErrorType.native;
   }
 
@@ -497,9 +505,6 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   @override
   Future<void> stop() async {
     await _player.pause();
-
-    await _player.seek(Duration.zero);
-
     _stateSubject.add(PlayerState.stopped);
   }
 

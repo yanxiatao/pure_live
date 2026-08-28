@@ -58,6 +58,22 @@ abstract interface class LivePlayUrlResolver {
   Future<LivePlayUrlResolution> resolvePlayUrlsRaw({required LiveRoom detail, required LivePlayQuality quality});
 }
 
+/// Optional cursor contract for adapters that must make a separate network
+/// request for every CDN line.
+///
+/// The ordinary playback API intentionally resolves all lines for an on-screen
+/// selector. Recording needs a different latency contract: obtain only the one
+/// line used by the current FFmpeg attempt and request the next line only after
+/// failure. Implementations return an empty URL list when [lineIndex] is beyond
+/// the platform's advertised lines.
+abstract interface class LivePlayUrlCursorResolver {
+  Future<LivePlayUrlResolution> resolvePlayUrlAtRaw({
+    required LiveRoom detail,
+    required LivePlayQuality quality,
+    required int lineIndex,
+  });
+}
+
 class LiveSite {
   String id = "";
   String name = "";
@@ -160,4 +176,24 @@ extension LiveSitePlayUrlResolution on LiveSite {
 /// implementation.
 abstract interface class LiveSiteRoomRefresher {
   Future<LiveRoom> getRoomDetailForRefresh({required String roomId, required String platform});
+}
+
+/// Strict, playback-complete room lookup used before a recording starts.
+///
+/// The ordinary [LiveSite.getRoomDetail] contract is UI-oriented. Several
+/// adapters deliberately turn transport/shape errors into an offline-looking
+/// fallback room so an already mounted player can keep its last metadata.
+/// That behaviour is useful for presentation, but it is unsafe for recording:
+/// one temporary metadata error was interpreted as an authoritative offline
+/// state and the recorder stopped before it ever asked for a stream URL.
+///
+/// [LiveSiteRoomRefresher] is not a substitute for this capability. Refresh
+/// implementations may intentionally omit signed playback descriptors to keep
+/// favourite-card refreshes cheap. Implementations of this interface must:
+///
+/// * propagate transport and response-shape failures;
+/// * return an explicit offline/banned room only when the platform said so;
+/// * retain every field required by [LiveSite.getPlayQualites].
+abstract interface class LiveSiteRecordRoomResolver {
+  Future<LiveRoom> getRoomDetailForRecording({required String roomId, required String platform});
 }

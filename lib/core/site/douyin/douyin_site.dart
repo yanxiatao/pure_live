@@ -15,8 +15,9 @@ import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/core/site/douyin/douyin_search.dart';
 import 'package:pure_live/core/utils/douyin/douyin_utils.dart';
 import 'package:pure_live/core/utils/douyin/douyin_request_params.dart';
+import 'package:pure_live/core/utils/live_quality_label.dart';
 
-class DouyinSite implements LiveSite {
+class DouyinSite implements LiveSite, LiveSiteRecordRoomResolver {
   @override
   String id = Sites.douyinSite;
 
@@ -390,6 +391,13 @@ class DouyinSite implements LiveSite {
     return await getRoomDetailByRoomId(roomId);
   }
 
+  @override
+  Future<LiveRoom> getRoomDetailForRecording({required String platform, required String roomId}) {
+    // Both the API and HTML paths propagate their final error and retain the
+    // stream_url envelope required to resolve every advertised sdk_key.
+    return getRoomDetail(platform: platform, roomId: roomId);
+  }
+
   Future<LiveRoom> getRoomDetailByRoomId(String roomId) async {
     // 读取房间信息
     var roomData = await _getRoomDataByRoomId(roomId);
@@ -405,7 +413,7 @@ class DouyinSite implements LiveSite {
     var room = roomData["data"]["room"];
     var owner = room["owner"];
 
-    var status = asT<int?>(room["status"]) ?? 0;
+    final status = int.tryParse(room['status']?.toString() ?? '') ?? 0;
 
     // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
     // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
@@ -474,7 +482,7 @@ class DouyinSite implements LiveSite {
 
     var owner = roomData["owner"];
 
-    var roomStatus = (asT<int?>(roomData["status"]) ?? 0) == 2;
+    final roomStatus = int.tryParse(roomData['status']?.toString() ?? '') == 2;
     final totalViewers = roomStatus ? douyinTotalViewers(roomData) : '';
     final onlineViewers = roomStatus ? douyinOnlineViewers(roomData) : '';
     final nativeAudience = totalViewers.isNotEmpty ? totalViewers : onlineViewers;
@@ -517,7 +525,7 @@ class DouyinSite implements LiveSite {
     var roomInfo = detail["roomStore"]["roomInfo"]["room"];
     var owner = roomInfo["owner"];
     var anchor = detail["roomStore"]["roomInfo"]["anchor"];
-    var roomStatus = (asT<int?>(roomInfo["status"]) ?? 0) == 2;
+    final roomStatus = int.tryParse(roomInfo['status']?.toString() ?? '') == 2;
     final totalViewers = roomStatus ? douyinTotalViewers(roomInfo) : '';
     final onlineViewers = roomStatus ? douyinOnlineViewers(roomInfo) : '';
     final nativeAudience = totalViewers.isNotEmpty ? totalViewers : onlineViewers;
@@ -716,15 +724,36 @@ class DouyinSite implements LiveSite {
 
       final configuredName = descriptor['name']?.toString().trim() ?? '';
       final resolutionName = _caseInsensitiveMapValue(resolutionNames, key)?.toString().trim() ?? '';
-      final bitRate = int.tryParse(descriptor['v_bit_rate']?.toString() ?? '');
-      final sort = bitRate ?? _douyinQualityRank(key);
+      final sdkParams = _decodeSdkParams(main is Map ? main['sdk_params'] : null);
+      final bitRate =
+          int.tryParse(descriptor['v_bit_rate']?.toString() ?? '') ??
+          int.tryParse(sdkParams['vbitrate']?.toString() ?? '');
+      final resolution = descriptor['resolution']?.toString().trim().isNotEmpty == true
+          ? descriptor['resolution'].toString()
+          : sdkParams['resolution']?.toString();
+      final level = int.tryParse(descriptor['level']?.toString() ?? '') ?? 0;
+      final knownRank = _douyinQualityRank(key);
+      // `v_bit_rate` is a stream property, not the quality hierarchy. Source
+      // can legitimately have a lower instantaneous bitrate than a transcoded
+      // tier; SDK key/level therefore owns ordering and bitrate is metadata.
+      final sort = knownRank > 0
+          ? knownRank
+          : level > 0
+          ? level * 1000000
+          : bitRate ?? 0;
       qualities.add(
         LivePlayQuality(
-          quality: configuredName.isNotEmpty
-              ? configuredName
-              : resolutionName.isNotEmpty
-              ? resolutionName
-              : key,
+          quality: LiveQualityLabel.normalize(
+            platform: Sites.douyinSite,
+            rawLabel: configuredName.isNotEmpty
+                ? configuredName
+                : resolutionName.isNotEmpty
+                ? resolutionName
+                : key,
+            id: key,
+            bitrate: bitRate,
+            resolution: resolution,
+          ),
           id: key.toLowerCase(),
           sort: sort,
           data: List<String>.unmodifiable(urls),
@@ -732,8 +761,33 @@ class DouyinSite implements LiveSite {
       );
     }
 
-    qualities.sort((left, right) => right.sort.compareTo(left.sort));
-    return qualities;
+    qualities.sort((left, right) {
+      final rank = right.sort.compareTo(left.sort);
+      return rank != 0 ? rank : left.selectionId.toString().compareTo(right.selectionId.toString());
+    });
+
+    // Platform aliases can expose the same actual URL under both legacy
+    // (`FULL_HD1`) and modern (`uhd`) keys. Presenting both would claim a
+    // quality change even though the player receives an identical source.
+    final seenStreams = <String>{};
+    return qualities
+        .where((quality) {
+          final urls = (quality.data as List).map((url) => url.toString()).toList()..sort();
+          return seenStreams.add(urls.join('\u0000'));
+        })
+        .toList(growable: false);
+  }
+
+  static Map<dynamic, dynamic> _decodeSdkParams(dynamic raw) {
+    if (raw is Map) return raw;
+    final value = raw?.toString().trim() ?? '';
+    if (value.isEmpty) return const <dynamic, dynamic>{};
+    try {
+      final decoded = jsonDecode(value);
+      return decoded is Map ? decoded : const <dynamic, dynamic>{};
+    } catch (_) {
+      return const <dynamic, dynamic>{};
+    }
   }
 
   static dynamic _caseInsensitiveMapValue(Map<dynamic, dynamic> map, String key) {
@@ -754,11 +808,12 @@ class DouyinSite implements LiveSite {
   }
 
   static int _douyinQualityRank(String key) => switch (key.toUpperCase()) {
-    'ORIGION' || 'ORIGIN' => 10000000,
-    'FULL_HD1' || 'UHD' => 4000000,
-    'HD1' || 'HD' => 2000000,
-    'SD1' || 'SD' => 1000000,
-    'SD2' || 'LD' => 500000,
+    'ORIGION' || 'ORIGIN' => 6000000,
+    'FULL_HD1' || 'UHD' => 5000000,
+    'HD1' || 'HD' => 4000000,
+    'SD2' || 'SD' => 3000000,
+    'SD1' || 'LD' => 2000000,
+    'MD' => 1000000,
     _ => 0,
   };
 

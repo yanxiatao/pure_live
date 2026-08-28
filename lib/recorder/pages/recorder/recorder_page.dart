@@ -5,6 +5,7 @@ import 'package:pure_live/routes/app_navigation.dart';
 import 'package:pure_live/recorder/models/record_status.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:pure_live/recorder/models/live_record_task.dart';
+import 'package:pure_live/recorder/widgets/recorder_bounded_scroll.dart';
 import 'package:pure_live/recorder/pages/recorder/recorder_controller.dart';
 
 class RecorderPage extends GetView<RecorderController> {
@@ -48,36 +49,27 @@ class RecorderPage extends GetView<RecorderController> {
             ),
             const SizedBox(width: 8),
           ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(54),
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: TabBar(
-                isScrollable: true,
-                tabs: tabs
-                    .map(
-                      (e) => Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Tab(text: i18n(e)),
-                      ),
-                    )
-                    .toList(),
+        ),
+        body: Column(
+          children: [
+            RecorderStatusSelector(labels: tabs.map(i18n).toList(growable: false)),
+            const Divider(height: 1),
+            Expanded(
+              child: TabBarView(
+                physics: const NeverScrollableScrollPhysics(),
+                children: [
+                  _TaskList(filter: null),
+                  _TaskList(filter: (e) => e.status == RecordStatus.running),
+                  _TaskList(filter: (e) => e.status == RecordStatus.waitingLive),
+                  _TaskList(filter: (e) => e.status == RecordStatus.queued),
+                  _TaskList(filter: (e) => e.status == RecordStatus.reconnecting),
+                  _TaskList(filter: (e) => e.status == RecordStatus.processing),
+                  _TaskList(filter: (e) => e.status == RecordStatus.completed),
+                  _TaskList(filter: (e) => e.status == RecordStatus.failed),
+                  _TaskList(filter: (e) => e.status == RecordStatus.stopped),
+                ],
               ),
             ),
-          ),
-        ),
-        body: TabBarView(
-          physics: const PureLiveScrollPhysics(),
-          children: [
-            _TaskList(filter: null),
-            _TaskList(filter: (e) => e.status == RecordStatus.running),
-            _TaskList(filter: (e) => e.status == RecordStatus.waitingLive),
-            _TaskList(filter: (e) => e.status == RecordStatus.queued),
-            _TaskList(filter: (e) => e.status == RecordStatus.reconnecting),
-            _TaskList(filter: (e) => e.status == RecordStatus.processing),
-            _TaskList(filter: (e) => e.status == RecordStatus.completed),
-            _TaskList(filter: (e) => e.status == RecordStatus.failed),
-            _TaskList(filter: (e) => e.status == RecordStatus.stopped),
           ],
         ),
       ),
@@ -87,24 +79,54 @@ class RecorderPage extends GetView<RecorderController> {
 
 class _TaskList extends GetView<RecorderController> {
   const _TaskList({this.filter});
-
   final bool Function(LiveRecordTask task)? filter;
+
+  // 状态权重，数字越小排序越靠前
+  int _getStatusPriority(RecordStatus status) {
+    switch (status) {
+      case RecordStatus.running:
+        return 0;
+      case RecordStatus.reconnecting:
+        return 1;
+      case RecordStatus.preparing:
+        return 2;
+      case RecordStatus.waitingLive:
+        return 3;
+      case RecordStatus.queued:
+        return 4;
+      case RecordStatus.processing:
+        return 5;
+      case RecordStatus.completed:
+        return 6;
+      case RecordStatus.stopped:
+        return 7;
+      case RecordStatus.failed:
+        return 8;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       List<LiveRecordTask> list = controller.tasks;
-
       if (filter != null) {
         list = list.where(filter!).toList();
+      } else {
+        list = List.from(list);
+        list.sort((a, b) {
+          final prioA = _getStatusPriority(a.status);
+          final prioB = _getStatusPriority(b.status);
+          if (prioA != prioB) {
+            return prioA.compareTo(prioB);
+          }
+          return b.createTime.compareTo(a.createTime);
+        });
       }
 
       if (list.isEmpty) {
         return const _EmptyView();
       }
-
-      return ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      return RecorderBoundedTaskList(
         itemCount: list.length,
         itemBuilder: (_, i) {
           return _TaskCard(key: ValueKey(list[i].taskId), task: list[i]);
@@ -235,6 +257,29 @@ class _TaskCard extends GetView<RecorderController> {
     }
 
     return "$bytes ${i18n("unit_b")}";
+  }
+
+  String _formatBitrate(double kilobitsPerSecond) {
+    if (!kilobitsPerSecond.isFinite || kilobitsPerSecond <= 0) return '--';
+    if (kilobitsPerSecond >= 1000) return '${(kilobitsPerSecond / 1000).toStringAsFixed(1)} Mbps';
+    return '${kilobitsPerSecond.toStringAsFixed(0)} kbps';
+  }
+
+  String _failureStageText() {
+    final stage = task.lastErrorStage;
+    if (stage == 'ffmpeg' || stage?.startsWith('ffmpeg.') == true) {
+      return i18n('recorder_stage_ffmpeg');
+    }
+    return switch (stage) {
+      'room' => i18n('recorder_stage_room'),
+      'quality' => i18n('recorder_stage_quality'),
+      'stream' => i18n('recorder_stage_stream'),
+      'network' => i18n('recorder_stage_network'),
+      'merge' => i18n('recorder_stage_merge'),
+      'scheduler' => i18n('recorder_stage_scheduler'),
+      'status' => i18n('recorder_stage_status'),
+      _ => i18n('recorder_stage_unknown'),
+    };
   }
 
   Widget _buildCoverImage(Color statusColor) {
@@ -457,7 +502,16 @@ class _TaskCard extends GetView<RecorderController> {
 
     final color = _statusColor();
 
-    final isRecording = [RecordStatus.running, RecordStatus.reconnecting, RecordStatus.preparing].contains(task.status);
+    final showRecordingStats =
+        const <RecordStatus>{
+          RecordStatus.running,
+          RecordStatus.reconnecting,
+          RecordStatus.processing,
+          RecordStatus.preparing,
+        }.contains(task.status) ||
+        task.recordedSeconds > 0 ||
+        task.fileSize > 0;
+    final isTransitioning = {RecordStatus.reconnecting, RecordStatus.preparing}.contains(task.status);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
@@ -539,6 +593,8 @@ class _TaskCard extends GetView<RecorderController> {
                           runSpacing: 6,
                           children: [
                             _miniInfo(Icons.high_quality_rounded, task.selectedQuality ?? i18n("recorder_auto"), theme),
+                            if (task.selectedLine?.isNotEmpty == true)
+                              _miniInfo(Icons.alt_route_rounded, task.selectedLine!, theme),
                             _miniInfo(Icons.people_alt_rounded, readableCount(task.watching), theme),
                           ],
                         ),
@@ -547,7 +603,7 @@ class _TaskCard extends GetView<RecorderController> {
                   ),
                 ],
               ),
-              if (isRecording) ...[
+              if (showRecordingStats) ...[
                 const SizedBox(height: 14),
                 Container(
                   padding: const EdgeInsets.all(14),
@@ -565,16 +621,65 @@ class _TaskCard extends GetView<RecorderController> {
                           _statItem(theme, Icons.timer_outlined, _formatDuration(task.recordedSeconds)),
                           _statItem(theme, Icons.storage_rounded, _formatFileSize(task.fileSize)),
                           _statItem(theme, Icons.speed_rounded, "${task.recordSpeed.toStringAsFixed(1)}x"),
-                          _statItem(theme, Icons.graphic_eq_rounded, "${task.bitrate ~/ 1000}M"),
+                          _statItem(theme, Icons.graphic_eq_rounded, _formatBitrate(task.bitrate)),
                         ],
                       ),
                       const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: LinearProgressIndicator(
-                          minHeight: 6,
-                          backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
+                      Container(
+                        height: 4,
+                        decoration: BoxDecoration(
                           color: theme.colorScheme.primary,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (isTransitioning) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: color.withValues(alpha: 0.14)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.sync_rounded, size: 17, color: color),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _statusText(),
+                          style: AppTextStyles.t12.copyWith(color: color, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (task.lastError?.isNotEmpty == true && task.status != RecordStatus.running) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.errorContainer.withValues(alpha: 0.52),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.error_outline_rounded, size: 17, color: theme.colorScheme.error),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          i18n('recorder_last_error', args: {'stage': _failureStageText(), 'error': task.lastError!}),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyles.t12.copyWith(color: theme.colorScheme.onErrorContainer, height: 1.3),
                         ),
                       ),
                     ],

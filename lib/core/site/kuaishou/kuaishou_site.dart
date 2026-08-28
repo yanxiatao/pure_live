@@ -14,8 +14,9 @@ import 'package:pure_live/core/danmaku/empty_danmaku.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
+import 'package:pure_live/core/utils/live_quality_label.dart';
 
-class KuaishowSite implements LiveSite, LiveSiteRoomRefresher {
+class KuaishowSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomResolver {
   @override
   String id = Sites.kuaishouSite;
 
@@ -222,7 +223,11 @@ class KuaishowSite implements LiveSite, LiveSiteRoomRefresher {
     final qualities = merged.values
         .map(
           (entry) => LivePlayQuality(
-            quality: entry.name,
+            quality: LiveQualityLabel.normalize(
+              platform: Sites.kuaishouSite,
+              rawLabel: entry.name,
+              id: '${entry.name}\u0000${entry.sort}',
+            ),
             id: '${entry.name}\u0000${entry.sort}',
             sort: entry.sort,
             data: List<String>.unmodifiable(entry.urls),
@@ -433,6 +438,22 @@ class KuaishowSite implements LiveSite, LiveSiteRoomRefresher {
     }
   }
 
+  @override
+  Future<LiveRoom> getRoomDetailForRecording({required String platform, required String roomId}) async {
+    final loaded = await _loadRoom(roomId, includePlaybackData: true, ensureSession: true);
+    if (loaded.status == true) return loaded;
+
+    // Recommendation cards can represent a replay whose room page reports
+    // offline. Preserve only a matching card with an actual playable stream;
+    // transport/shape failures above still propagate to the recorder retry
+    // policy instead of masquerading as offline.
+    final current = _matchingCurrentRoom(platform: platform, roomId: roomId);
+    if (current != null && parsePlayQualities(current.data).isNotEmpty) {
+      return current.copyWith(status: true, liveStatus: LiveStatus.live, isRecord: true);
+    }
+    return loaded;
+  }
+
   Future<LiveRoom> _loadRoom(String roomId, {required bool includePlaybackData, required bool ensureSession}) async {
     final url = "https://live.kuaishou.com/u/$roomId";
     if (ensureSession) await _ensureSession(url);
@@ -447,7 +468,8 @@ class KuaishowSite implements LiveSite, LiveSiteRoomRefresher {
     final liveStream = room["liveStream"] is Map ? room["liveStream"] as Map : const <dynamic, dynamic>{};
     final author = room["author"] is Map ? room["author"] as Map : const <dynamic, dynamic>{};
     final gameInfo = room["gameInfo"] is Map ? room["gameInfo"] as Map : const <dynamic, dynamic>{};
-    final live = room["isLiving"] == true;
+    final rawLiveState = room['isLiving'];
+    final live = rawLiveState == true || rawLiveState == 1 || rawLiveState?.toString().toLowerCase() == 'true';
     final description = author["description"]?.toString() ?? '';
     return LiveRoom(
       cover: isImage(liveStream['poster']) ? liveStream['poster'].toString() : '${liveStream['poster'].toString()}.jpg',

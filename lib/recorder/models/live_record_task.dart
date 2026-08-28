@@ -1,5 +1,6 @@
 import 'package:pure_live/common/models/live_room.dart';
 import 'package:pure_live/recorder/models/record_status.dart';
+import 'package:pure_live/recorder/services/recorder_diagnostics.dart';
 
 class LiveRecordTask {
   /// =========================
@@ -37,6 +38,12 @@ class LiveRecordTask {
   String? selectedLine;
 
   String? selectedQuality;
+
+  /// Stable retry cursor. Unlike [currentUrl], these values contain no signed
+  /// stream data and can safely survive process restarts.
+  String? selectedQualityId;
+
+  int? selectedLineIndex;
 
   /// 输出目录
   String? outputDir;
@@ -80,6 +87,12 @@ class LiveRecordTask {
 
   DateTime? lastFailTime;
 
+  /// Sanitized user-visible failure from the most recent attempt.
+  String? lastError;
+
+  /// Stable stage id: room, stream, ffmpeg, merge, scheduler or status.
+  String? lastErrorStage;
+
   bool wasStoppedByUser;
 
   LiveRecordTask({
@@ -100,6 +113,8 @@ class LiveRecordTask {
     this.currentUrl,
     this.selectedLine,
     this.selectedQuality,
+    this.selectedQualityId,
+    this.selectedLineIndex,
     this.outputDir,
 
     /// 实时信息
@@ -117,6 +132,8 @@ class LiveRecordTask {
     this.retryCount = 0,
     this.wasStoppedByUser = false,
     this.lastFailTime,
+    this.lastError,
+    this.lastErrorStage,
   });
 
   /// =========================
@@ -189,9 +206,18 @@ class LiveRecordTask {
   }
 
   void beginNewRecording({DateTime? now}) {
-    createTime = now ?? DateTime.now();
     recordedSeconds = 0;
     fileSize = 0;
+    beginNewAttempt(now: now);
+  }
+
+  /// Starts one native FFmpeg attempt without discarding the aggregate
+  /// duration/size of the user-initiated recording session. Live CDNs can end
+  /// a response or expire a signed URL while the room is still online; those
+  /// retries are file attempts, not new recordings from the user's point of
+  /// view.
+  void beginNewAttempt({DateTime? now}) {
+    createTime = now ?? DateTime.now();
     recordSpeed = 0;
     bitrate = 0;
     fps = 0;
@@ -202,11 +228,31 @@ class LiveRecordTask {
     selectedQuality = null;
   }
 
+  void markFailure({required String stage, required Object error, DateTime? now}) {
+    lastFailTime = now ?? DateTime.now();
+    lastErrorStage = stage.trim().toLowerCase();
+    final sanitized = RecorderDiagnostics.sanitize(error);
+    lastError = sanitized.isEmpty ? null : sanitized;
+  }
+
+  void clearFailure() {
+    lastError = null;
+    lastErrorStage = null;
+  }
+
+  String get recordingFilePrefix {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${createTime.year}${two(createTime.month)}${two(createTime.day)}_'
+        '${two(createTime.hour)}${two(createTime.minute)}${two(createTime.second)}_'
+        '${createTime.millisecond.toString().padLeft(3, '0')}';
+  }
+
   /// =========================
   /// json
   /// =========================
 
   Map<String, dynamic> toJson() => {
+    "schemaVersion": 4,
     "taskId": taskId,
     "roomId": roomId,
     "platform": platform,
@@ -222,10 +268,14 @@ class LiveRecordTask {
     "isRecord": isRecord,
 
     "liveStatus": liveStatus.index,
+    "liveStatusName": liveStatus.name,
 
-    "currentUrl": currentUrl,
+    // Signed CDN addresses expire quickly and can contain account/session
+    // tokens. They are runtime-only and must not be written to local prefs.
     "selectedLine": selectedLine,
     "selectedQuality": selectedQuality,
+    "selectedQualityId": selectedQualityId,
+    "selectedLineIndex": selectedLineIndex,
     "outputDir": outputDir,
 
     /// 实时信息
@@ -239,73 +289,168 @@ class LiveRecordTask {
 
     /// 状态
     "status": status.index,
+    "statusName": status.name,
     "autoReconnect": autoReconnect,
     "retryCount": retryCount,
 
     "createTime": createTime.toIso8601String(),
 
     "lastFailTime": lastFailTime?.toIso8601String(),
+    "lastError": lastError,
+    "lastErrorStage": lastErrorStage,
     "wasStoppedByUser": wasStoppedByUser,
   };
 
   factory LiveRecordTask.fromJson(Map<String, dynamic> json) {
+    final roomId = _string(json["roomId"]);
+    final platform = _string(json["platform"]).toLowerCase();
     return LiveRecordTask(
-      taskId: json["taskId"] ?? "",
+      taskId: _string(json["taskId"], fallback: "${platform}_$roomId"),
 
-      roomId: json["roomId"] ?? "",
+      roomId: roomId,
 
-      platform: json["platform"] ?? "",
+      platform: platform,
 
-      title: json["title"] ?? "",
+      title: _string(json["title"]),
 
-      nick: json["nick"] ?? "",
+      nick: _string(json["nick"]),
 
-      avatar: json["avatar"] ?? "",
+      avatar: _string(json["avatar"]),
 
-      cover: json["cover"] ?? "",
+      cover: _string(json["cover"]),
 
-      watching: json["watching"] ?? "0",
+      watching: _string(json["watching"], fallback: "0"),
 
-      followers: json["followers"] ?? "0",
+      followers: _string(json["followers"], fallback: "0"),
 
-      isRecord: json["isRecord"] ?? false,
+      isRecord: _bool(json["isRecord"]),
 
-      liveStatus: LiveStatus.values[json["liveStatus"] ?? 0],
+      liveStatus: _enumValue(
+        LiveStatus.values,
+        name: json["liveStatusName"],
+        index: json["liveStatus"],
+        fallback: LiveStatus.unknown,
+      ),
 
-      currentUrl: json["currentUrl"],
+      // Discard schema-v1/v2 persisted signed URLs during migration.
+      currentUrl: null,
 
-      selectedLine: json["selectedLine"],
+      selectedLine: _nullableString(json["selectedLine"]),
 
-      selectedQuality: json["selectedQuality"],
+      selectedQuality: _nullableString(json["selectedQuality"]),
 
-      outputDir: json["outputDir"],
+      selectedQualityId: _nullableString(json["selectedQualityId"]),
+
+      selectedLineIndex: _nullableInt(json["selectedLineIndex"]),
+
+      outputDir: _nullableString(json["outputDir"]),
 
       /// 实时录制
-      recordedSeconds: json["recordedSeconds"] ?? 0,
+      recordedSeconds: _int(json["recordedSeconds"]),
 
-      fileSize: json["fileSize"] ?? 0,
+      fileSize: _int(json["fileSize"]),
 
-      recordSpeed: (json["recordSpeed"] ?? 0).toDouble(),
+      recordSpeed: _double(json["recordSpeed"]),
 
-      bitrate: (json["bitrate"] ?? 0).toDouble(),
+      bitrate: _double(json["bitrate"]),
 
-      fps: (json["fps"] ?? 0).toDouble(),
+      fps: _double(json["fps"]),
 
-      lastFrame: json["lastFrame"] ?? 0,
+      lastFrame: _int(json["lastFrame"]),
 
-      lastUpdate: json["lastUpdate"] != null ? DateTime.tryParse(json["lastUpdate"]) : null,
+      lastUpdate: _date(json["lastUpdate"]),
 
       /// 状态
-      status: RecordStatus.values[json["status"] ?? 0],
+      status: _enumValue(
+        RecordStatus.values,
+        name: json["statusName"],
+        index: json["status"],
+        fallback: RecordStatus.stopped,
+      ),
 
-      autoReconnect: json["autoReconnect"] ?? true,
+      autoReconnect: _bool(json["autoReconnect"], fallback: true),
 
-      retryCount: json["retryCount"] ?? 0,
+      retryCount: _int(json["retryCount"]),
 
-      createTime: DateTime.tryParse(json["createTime"] ?? "") ?? DateTime.now(),
+      createTime: _date(json["createTime"]) ?? DateTime.now(),
 
-      lastFailTime: json["lastFailTime"] != null ? DateTime.tryParse(json["lastFailTime"]) : null,
-      wasStoppedByUser: json["wasStoppedByUser"] ?? false,
+      lastFailTime: _date(json["lastFailTime"]),
+      lastError: _diagnostic(json["lastError"]),
+      lastErrorStage: _stage(json["lastErrorStage"]),
+      wasStoppedByUser: _bool(json["wasStoppedByUser"]),
     );
+  }
+
+  static String _string(dynamic value, {String fallback = ''}) {
+    final text = value?.toString() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  static String? _nullableString(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  static String? _diagnostic(dynamic value) {
+    final sanitized = RecorderDiagnostics.sanitize(value);
+    return sanitized.isEmpty ? null : sanitized;
+  }
+
+  static String? _stage(dynamic value) {
+    final normalized = value?.toString().trim().toLowerCase() ?? '';
+    if (normalized.startsWith('ffmpeg.')) return normalized;
+    return const {
+          'room',
+          'quality',
+          'stream',
+          'network',
+          'ffmpeg',
+          'merge',
+          'scheduler',
+          'status',
+          'recorder',
+        }.contains(normalized)
+        ? normalized
+        : null;
+  }
+
+  static int _int(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static int? _nullableInt(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  static double _double(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static bool _bool(dynamic value, {bool fallback = false}) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().toLowerCase();
+    if (normalized == 'true' || normalized == '1') return true;
+    if (normalized == 'false' || normalized == '0') return false;
+    return fallback;
+  }
+
+  static DateTime? _date(dynamic value) => DateTime.tryParse(value?.toString() ?? '');
+
+  static T _enumValue<T>(List<T> values, {dynamic name, dynamic index, required T fallback}) {
+    final normalizedName = name?.toString().trim();
+    if (normalizedName?.isNotEmpty == true) {
+      for (final value in values) {
+        if (value.toString().split('.').last == normalizedName) return value;
+      }
+    }
+    final parsedIndex = index is num ? index.toInt() : int.tryParse(index?.toString() ?? '');
+    if (parsedIndex != null && parsedIndex >= 0 && parsedIndex < values.length) {
+      return values[parsedIndex];
+    }
+    return fallback;
   }
 }

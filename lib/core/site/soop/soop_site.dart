@@ -9,8 +9,9 @@ import 'package:pure_live/core/interface/live_site.dart';
 import 'package:pure_live/core/danmaku/soop_danmaku.dart';
 import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
+import 'package:pure_live/core/utils/live_quality_label.dart';
 
-class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
+class SoopSite extends LiveSite implements LiveSiteRoomRefresher, LiveSiteRecordRoomResolver {
   @override
   String get id => Sites.soopSite;
 
@@ -240,15 +241,20 @@ class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
     final presets = data is Map ? data["viewpreset"] : null;
     if (presets is! List) return Future.value(qualities);
     for (final quality in presets.whereType<Map>()) {
-      var key = quality["name"];
-      if (key == null || key == "auto") {
-        continue;
-      }
-      qualityMap.putIfAbsent(key, () {
+      final key = quality["name"]?.toString().trim() ?? '';
+      if (key.isEmpty || key.toLowerCase() == 'auto') continue;
+      final identity = key.toLowerCase();
+      final bitrate = int.tryParse(quality['bps']?.toString() ?? '') ?? 0;
+      qualityMap.putIfAbsent(identity, () {
         return LivePlayQuality(
-          quality: key.toString(),
+          quality: LiveQualityLabel.normalize(
+            platform: Sites.soopSite,
+            rawLabel: key.toString(),
+            id: key,
+            bitrate: bitrate > 0 ? bitrate : null,
+          ),
           id: key.toString(),
-          sort: int.tryParse(quality["bps"].toString()) ?? 0,
+          sort: _qualitySort(key.toString(), bitrate),
           data: <String>[],
         );
       });
@@ -256,6 +262,23 @@ class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
     qualities = qualityMap.values.toList();
     qualities.sort((a, b) => b.sort.compareTo(a.sort));
     return Future.value(qualities);
+  }
+
+  /// SOOP's request name is the stable quality identity. `bps` is useful only
+  /// inside the same tier: source presets are occasionally returned with a
+  /// missing/zero bitrate and must not fall below transcoded variants.
+  static int _qualitySort(String rawName, int bitrate) {
+    final name = rawName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+    final rank = switch (name) {
+      'original' || 'origin' || 'source' => 6,
+      'master' || 'uhd' => 5,
+      'fullhd' || 'fhd' => 4,
+      'hd' => 3,
+      'sd' || 'normal' => 2,
+      'low' || 'ld' => 1,
+      _ => 0,
+    };
+    return rank == 0 ? bitrate : rank * 100000000 + bitrate.clamp(0, 99999999);
   }
 
   @override
@@ -271,14 +294,15 @@ class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
     }
 
     try {
-      final cdnUrl = await getCdnUrl(rmd: rmd, cdn: cdn, bno: bno, quality: quality.quality);
-      final aid = await getStreamAid(roomId: detail.roomId ?? "", bno: bno, quality: quality.quality);
+      final qualityId = quality.selectionId.toString();
+      final cdnUrl = await getCdnUrl(rmd: rmd, cdn: cdn, bno: bno, quality: qualityId);
+      final aid = await getStreamAid(roomId: detail.roomId ?? "", bno: bno, quality: qualityId);
 
       if (cdnUrl.isEmpty || aid.isEmpty) return const [];
       return ['$cdnUrl?aid=$aid'];
     } catch (e) {
       CoreLog.error(e);
-      return const [];
+      rethrow;
     }
   }
 
@@ -374,6 +398,26 @@ class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
     return getLiveRoomByApi(data, null, roomId);
   }
 
+  @override
+  Future<LiveRoom> getRoomDetailForRecording({required String platform, required String roomId}) async {
+    // The player API response contains viewpreset/rmd/cdn/bno, all of which
+    // are required later to sign the selected recording URL. Skip websocket
+    // credentials but keep the complete playback envelope.
+    final data = await getPlayerLiveApiData(roomId: roomId);
+    final channel = data['CHANNEL'];
+    if (channel is! Map) throw const FormatException('SOOP recording metadata is missing');
+    final rawCode = channel['RESULT'];
+    final resultCode = rawCode is num ? rawCode.toInt() : int.tryParse(rawCode?.toString() ?? '');
+    if (resultCode == 0) {
+      return LiveRoom(roomId: roomId, platform: Sites.soopSite, status: false, liveStatus: LiveStatus.offline);
+    }
+    if (resultCode == -2) {
+      return LiveRoom(roomId: roomId, platform: Sites.soopSite, status: false, liveStatus: LiveStatus.banned);
+    }
+    if (resultCode != 1) throw StateError('SOOP recording metadata returned code $resultCode');
+    return getLiveRoomByApi(data, null, roomId);
+  }
+
   Future<LiveRoom> getLiveRoomByApi(
     Map<dynamic, dynamic> playerLiveApiData,
     SoopDanmakuArgs? danmakuArgs,
@@ -382,7 +426,10 @@ class SoopSite extends LiveSite implements LiveSiteRoomRefresher {
     var playerLiveApi = playerLiveApiData;
     var jsonObj = playerLiveApi["CHANNEL"];
 
-    int resultCode = jsonObj['RESULT'] ?? 0;
+    final rawResultCode = jsonObj is Map ? jsonObj['RESULT'] : null;
+    final resultCode = rawResultCode is num
+        ? rawResultCode.toInt()
+        : int.tryParse(rawResultCode?.toString() ?? '') ?? 0;
     // 业务码：1成功，-6需要登录，0无直播，‑2屏蔽
     if (resultCode != 1) {
       CoreLog.w("soop channel result code=$resultCode");

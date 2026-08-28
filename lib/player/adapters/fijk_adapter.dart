@@ -100,6 +100,7 @@ class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor {
           break;
         case FijkState.error:
           _loadingSubject.add(false);
+          print('Fijk native error: ${_player.state.toString()}');
           final exception = PlayerException(message: 'Fijk native error', type: PlayerErrorType.native);
           _safeAddError(exception);
           _player.reset();
@@ -157,7 +158,11 @@ class FijkAdapter implements UnifiedPlayer, FijkPlayerAccessor {
         await _player.reset();
       }
       await _setupProxy();
-      await FijkHelper.setFijkOption(_player, enableCodec: SettingsService.to.player.enableCodec.v, headers: headers);
+      await FijkHelper.setFijkOption(
+        _player,
+        enableHardwareCodec: SettingsService.to.player.enableCodec.v,
+        headers: headers,
+      );
 
       await _player.setDataSource(url, autoPlay: true);
       _stateSubject.add(PlayerState.ready);

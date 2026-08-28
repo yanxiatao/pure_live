@@ -26,6 +26,7 @@ import 'package:pure_live/routes/app_navigation.dart';
 import 'package:pure_live/model/live_play_quality.dart';
 import 'package:pure_live/player/utils/fullscreen.dart';
 import 'package:flutter_floating/flutter_floating.dart';
+import 'package:pure_live/player/utils/window_helper.dart';
 import 'package:pure_live/player/utils/player_consts.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/player/utils/pip_window_widget.dart';
@@ -181,6 +182,10 @@ class PlayerManager {
         _currentUrl?.isNotEmpty == true &&
         currentFloatRoom == room &&
         isPlayingNow;
+  }
+
+  bool _isCurrentPlayerSession(UnifiedPlayer player, int sessionId) {
+    return !_disposed && !_isClosing && identical(_currentPlayer, player) && _sessionId == sessionId;
   }
 
   void prepareRoomSessionReentry(LiveRoom room) {
@@ -349,7 +354,7 @@ class PlayerManager {
       _requestedAudioOnly = audioOnly;
       _nativeAudioOnly = audioOnly;
 
-      await _bindPlayerStreams(player);
+      await _bindPlayerStreams(player, sessionId: sessionId);
 
       if (!_isSessionValid(sessionId)) {
         await _safeDestroyPlayer(player);
@@ -447,10 +452,11 @@ class PlayerManager {
       if (!_isSessionValid(mySessionId)) {
         return;
       }
-
       throw PlayerException(message: 'Current player is null', type: PlayerErrorType.lifecycle);
     }
+    await _bindPlayerStreams(player, sessionId: mySessionId);
 
+    if (!_isSessionValid(mySessionId)) return;
     // Every bundled player has a native audio-only path.  Opening the original
     // live URL directly avoids a second FFmpeg decode pipeline and removes the
     // previous fixed two-second wait / 30-second pipe timeout.
@@ -461,6 +467,11 @@ class PlayerManager {
     _currentPlayUrls = targetPlayUrls;
     _currentHeaders = headers;
     currentFloatRoom = room;
+
+    _widthSubject.add(null);
+    _heightSubject.add(null);
+    isVerticalVideo.value = false;
+
     hasError.value = false;
 
     try {
@@ -771,26 +782,39 @@ class PlayerManager {
     final targetAudioOnly = audioOnly ?? _runtimeAudioOnly;
 
     try {
-      await _clearSubscriptions();
       final newPlayer = await _createPlayer(engine, audioOnly: targetAudioOnly);
+
       if (!_isSessionValid(sessionId)) {
         await _safeDestroyPlayer(newPlayer);
         return;
       }
+
       _currentPlayer = newPlayer;
       _runtimeEngine = engine;
       _runtimeAudioOnly = targetAudioOnly;
       _requestedAudioOnly = targetAudioOnly;
       _nativeAudioOnly = targetAudioOnly;
-
+      isInitialized.value = true;
+      videoPresentationRevision.value++;
       if (isManual) {
         _defaultEngine = engine;
       }
-      await _bindPlayerStreams(newPlayer);
+      await _clearSubscriptions();
+
+      // 绑定新播放器监听。
+      await _bindPlayerStreams(newPlayer, sessionId: sessionId);
+
+      if (!_isSessionValid(sessionId) || !identical(_currentPlayer, newPlayer)) {
+        await _safeDestroyPlayer(newPlayer);
+        return;
+      }
+
       if (oldPlayer != null && !identical(oldPlayer, newPlayer)) {
         await _safeDestroyPlayer(oldPlayer);
       }
+
       videoKey.value = ValueKey("video_${DateTime.now().millisecondsSinceEpoch}");
+
       _scheduleAudioServiceSync(newPlayer, targetAudioOnly, room: currentFloatRoom, sessionId: sessionId);
     } catch (e, s) {
       final exception = PlayerException(
@@ -799,6 +823,7 @@ class PlayerManager {
         error: e,
         stackTrace: s,
       );
+
       _errorSubject.add(exception);
       rethrow;
     }
@@ -877,18 +902,27 @@ class PlayerManager {
 
   math.Rectangle<int>? _currentPipSourceRect() {
     final context = _pipSourceKey.currentContext;
-    final renderObject = context?.findRenderObject();
+    if (context == null) return null;
+    final renderObject = context.findRenderObject();
     if (renderObject is! RenderBox || !renderObject.hasSize) return null;
-    final view = View.maybeOf(context!);
+    final view = View.maybeOf(context);
     if (view == null) return null;
     final origin = renderObject.localToGlobal(Offset.zero);
-    final ratio = View.of(context).devicePixelRatio;
-    final left = (origin.dx * ratio).round();
-    final top = (origin.dy * ratio).round();
-    final width = (renderObject.size.width * ratio).round();
-    final height = (renderObject.size.height * ratio).round();
+    final devicePixelRatio = view.devicePixelRatio;
+    final left = (origin.dx * devicePixelRatio).round();
+    final top = (origin.dy * devicePixelRatio).round();
+    final width = (renderObject.size.width * devicePixelRatio).round();
+    final height = (renderObject.size.height * devicePixelRatio).round();
     if (width <= 0 || height <= 0) return null;
     return math.Rectangle<int>(left, top, width, height);
+  }
+
+  void _schedulePipGeometryUpdate() {
+    _geometryStabilityTimer?.cancel();
+    _geometryStabilityTimer = Timer(const Duration(milliseconds: 100), () {
+      if (_disposed || _isClosing || !isInPip.value) return;
+      unawaited(WindowHelper.instance.capturePiPGeometry(videoRatio: rawVideoAspectRatio));
+    });
   }
 
   Future<void> exitPip() async {
@@ -1595,14 +1629,20 @@ class PlayerManager {
     }
   }
 
-  Future<void> _bindPlayerStreams(UnifiedPlayer player) async {
+  Future<void> _bindPlayerStreams(UnifiedPlayer player, {required int sessionId}) async {
     await _clearSubscriptions();
+    final int bindSessionId = sessionId;
     _subscriptions.add(
       player.onPlaying.listen((event) async {
+        if (!_isCurrentPlayerSession(player, bindSessionId)) {
+          return;
+        }
         _playingSubject.add(event);
+
         if (event) {
           hasError.value = false;
           _stateSubject.add(PlayerState.playing);
+
           if (_isSwitchingDueToFallback) {
             _isSwitchingDueToFallback = false;
           }
@@ -1611,47 +1651,87 @@ class PlayerManager {
         }
       }),
     );
+
     _subscriptions.add(
       player.onLoading.listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         _loadingSubject.add(event);
+
         if (event && _stateSubject.value != PlayerState.buffering) {
           _stateSubject.add(PlayerState.buffering);
         }
       }),
     );
+
     _subscriptions.add(
       player.onComplete.listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         _completeSubject.add(event);
       }),
     );
+
     _subscriptions.add(
       player.onStateChanged.listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         _stateSubject.add(event);
       }),
     );
+
     _subscriptions.add(
       player.onError.listen((error) {
-        if (!_isHandlingError) {
-          unawaited(_handleError(error));
+        if (!_isHandlingError && _isSessionValid(sessionId) && identical(_currentPlayer, player)) {
+          unawaited(_handleError(error, sessionId: sessionId));
         }
       }),
     );
+
     _subscriptions.add(
       player.width.listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         _widthSubject.add(event);
+
+        if (Platform.isWindows && isInPip.value) {
+          _schedulePipGeometryUpdate();
+        }
       }),
     );
+
     _subscriptions.add(
       player.height.listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         _heightSubject.add(event);
+
+        if (Platform.isWindows && isInPip.value) {
+          _schedulePipGeometryUpdate();
+        }
       }),
     );
+
     _subscriptions.add(
       CombineLatestStream.combine2<int?, int?, bool>(
         width.where((w) => w != null && w > 0),
         height.where((h) => h != null && h > 0),
         (w, h) => h! >= w!,
       ).distinct().listen((event) {
+        if (!_isSessionValid(sessionId) || !identical(_currentPlayer, player)) {
+          return;
+        }
+
         isVerticalVideo.value = event;
       }),
     );

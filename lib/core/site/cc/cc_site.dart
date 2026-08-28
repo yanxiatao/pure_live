@@ -10,8 +10,9 @@ import 'package:pure_live/core/interface/live_site.dart';
 import 'package:pure_live/core/danmaku/empty_danmaku.dart';
 import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
+import 'package:pure_live/core/utils/live_quality_label.dart';
 
-class CCSite implements LiveSite, LiveSiteRoomRefresher {
+class CCSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomResolver {
   @override
   String id = Sites.ccSite;
 
@@ -136,17 +137,25 @@ class CCSite implements LiveSite, LiveSiteRoomRefresher {
       final otherLines = <String>[];
       cdn.forEach((line, lineValue) {
         final baseUrl = detail.link?.trim() ?? '';
-        final url = isLiveStream && baseUrl.isNotEmpty ? '$baseUrl&$lineValue' : lineValue.toString();
+        final url = isLiveStream && baseUrl.isNotEmpty
+            ? _resolveLiveCdnUrl(baseUrl, lineValue)
+            : _normalizeDirectUrl(lineValue);
         if (Uri.tryParse(url)?.hasScheme != true) return;
         final target = priority.contains(line.toString().toLowerCase()) ? preferredLines : otherLines;
         if (!target.contains(url)) target.add(url);
       });
       final lines = <String>[...preferredLines, ...otherLines];
       if (lines.isEmpty) return;
-      final sort = int.tryParse(value['vbr']?.toString() ?? '') ?? 0;
+      final bitrateKbps = int.tryParse(value['vbr']?.toString() ?? '') ?? 0;
+      final sort = _qualitySort(key.toString(), bitrateKbps);
       qualities.add(
         LivePlayQuality(
-          quality: reflect[key] ?? key.toString(),
+          quality: LiveQualityLabel.normalize(
+            platform: Sites.ccSite,
+            rawLabel: reflect[key] ?? key.toString(),
+            id: key,
+            bitrate: bitrateKbps > 0 ? bitrateKbps * 1000 : null,
+          ),
           id: key.toString(),
           sort: sort,
           data: List<String>.unmodifiable(lines),
@@ -156,6 +165,39 @@ class CCSite implements LiveSite, LiveSiteRoomRefresher {
     qualities.sort((a, b) => b.sort.compareTo(a.sort));
 
     return Future.value(qualities);
+  }
+
+  /// CC may omit `vbr` for the untouched stream. Prefer the documented tier
+  /// identity, then use bitrate as a tie-breaker, instead of demoting 原画 to
+  /// the bottom because its metadata happens to be absent.
+  static int _qualitySort(String rawKey, int bitrateKbps) {
+    final key = rawKey.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+    final rank = switch (key) {
+      'blueray' || 'original' || 'origin' || 'source' => 6,
+      'ultra' => 5,
+      'high' || 'hd' => 4,
+      'medium' || 'standard' || 'sd' => 3,
+      'low' || 'ld' => 2,
+      _ => 0,
+    };
+    return rank == 0 ? bitrateKbps : rank * 1000000 + bitrateKbps.clamp(0, 999999);
+  }
+
+  static String _resolveLiveCdnUrl(String baseUrl, dynamic lineValue) {
+    final value = lineValue?.toString().trim() ?? '';
+    if (value.startsWith('//')) return 'https:$value';
+    final direct = Uri.tryParse(value);
+    if (direct?.hasScheme == true) {
+      return const {'http', 'https'}.contains(direct!.scheme.toLowerCase()) ? value : '';
+    }
+    if (value.isEmpty) return baseUrl;
+    final suffix = value.replaceFirst(RegExp(r'^[?&]+'), '');
+    return '$baseUrl${baseUrl.contains('?') ? '&' : '?'}$suffix';
+  }
+
+  static String _normalizeDirectUrl(dynamic lineValue) {
+    final value = lineValue?.toString().trim() ?? '';
+    return value.startsWith('//') ? 'https:$value' : value;
   }
 
   @override
@@ -225,6 +267,11 @@ class CCSite implements LiveSite, LiveSiteRoomRefresher {
     return _loadRoomDetail(roomId);
   }
 
+  @override
+  Future<LiveRoom> getRoomDetailForRecording({required String platform, required String roomId}) {
+    return _loadRoomDetail(roomId);
+  }
+
   Future<LiveRoom> _loadRoomDetail(String roomId) async {
     const url = "https://api.cc.163.com/v1/activitylives/anchor/lives";
     final result = await HttpClient.instance.getJson(
@@ -238,6 +285,7 @@ class CCSite implements LiveSite, LiveSiteRoomRefresher {
     final roomInfo = resultReal["data"][0];
     final audience = parseRoomAudience(Map<String, dynamic>.from(roomInfo as Map));
     final nativeMetric = audience.popularity.isNotEmpty ? audience.popularity : audience.onlineViewers;
+    final live = int.tryParse(roomInfo['status']?.toString() ?? '') == 1;
     return LiveRoom(
       cover: roomInfo["cover"],
       watching: nativeMetric.isNotEmpty ? nativeMetric : roomInfo["follower_num"].toString(),
@@ -255,8 +303,8 @@ class CCSite implements LiveSite, LiveSiteRoomRefresher {
       avatar: roomInfo["purl"].toString(),
       introduction: roomInfo["personal_label"],
       notice: roomInfo["personal_label"],
-      status: roomInfo["status"] == 1,
-      liveStatus: roomInfo["status"] == 1 ? LiveStatus.live : LiveStatus.offline,
+      status: live,
+      liveStatus: live ? LiveStatus.live : LiveStatus.offline,
       platform: Sites.ccSite,
       link: roomInfo['m3u8'],
       userId: roomInfo['cid'].toString(),

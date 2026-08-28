@@ -10,9 +10,10 @@ import 'package:pure_live/core/interface/live_site.dart';
 import 'package:pure_live/core/danmaku/douyu_danmaku.dart';
 import 'package:pure_live/core/site/douyu/douyu_utils.dart';
 import 'package:pure_live/core/interface/live_danmaku.dart';
+import 'package:pure_live/core/utils/live_quality_label.dart';
 import 'package:pure_live/modules/live_play/controllers/player_controller.dart';
 
-class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
+class DouyuSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomResolver, LivePlayUrlCursorResolver {
   @override
   String id = Sites.douyuSite;
 
@@ -137,7 +138,11 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
         if (qualities.any((quality) => quality.selectionId == rate)) continue;
         qualities.add(
           LivePlayQuality(
-            quality: name?.isNotEmpty == true ? name! : 'rate $rate',
+            quality: LiveQualityLabel.normalize(
+              platform: Sites.douyuSite,
+              rawLabel: name?.isNotEmpty == true ? name! : '',
+              id: rate,
+            ),
             id: rate,
             sort: rateItems.length - index,
             data: DouyuPlayData(rate, List<String>.unmodifiable(cdns)),
@@ -148,7 +153,12 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
     if (qualities.isEmpty) {
       final rate = _asInt(playData['rate']) ?? -1;
       qualities.add(
-        LivePlayQuality(quality: 'default', id: rate, sort: 1, data: DouyuPlayData(rate, List.unmodifiable(cdns))),
+        LivePlayQuality(
+          quality: LiveQualityLabel.normalize(platform: Sites.douyuSite, rawLabel: 'default', id: rate),
+          id: rate,
+          sort: 1,
+          data: DouyuPlayData(rate, List.unmodifiable(cdns)),
+        ),
       );
     }
     return qualities;
@@ -171,6 +181,27 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
     }
     if (urls.isEmpty && lastError != null) throw lastError;
     return urls;
+  }
+
+  @override
+  Future<LivePlayUrlResolution> resolvePlayUrlAtRaw({
+    required LiveRoom detail,
+    required LivePlayQuality quality,
+    required int lineIndex,
+  }) async {
+    final data = quality.data;
+    if (data is! DouyuPlayData || lineIndex < 0 || lineIndex >= data.cdns.length) {
+      return LivePlayUrlResolution(urls: const <String>[], appliedQualityData: quality.selectionId);
+    }
+    final roomId = detail.roomId?.trim() ?? '';
+    if (roomId.isEmpty) {
+      return LivePlayUrlResolution(urls: const <String>[], appliedQualityData: quality.selectionId);
+    }
+    final url = await getPlayUrl(roomId, data.rate, data.cdns[lineIndex]);
+    return LivePlayUrlResolution(
+      urls: url.isEmpty ? const <String>[] : <String>[url],
+      appliedQualityData: quality.selectionId,
+    );
   }
 
   Future<String> getPlayUrl(String roomId, int rate, String cdn) async {
@@ -236,18 +267,33 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
   @visibleForTesting
   static String parsePlayUrl(Map<String, dynamic> data) {
     final unescape = HtmlUnescape();
-    for (final key in const <String>['flv_url', 'stream_url', 'url']) {
+    final live = unescape.convert(data['rtmp_live']?.toString().trim() ?? '');
+    // Some current H5 responses return a complete signed FLV address in
+    // rtmp_live. It must win over the separate CDN base fields; prefixing a
+    // second absolute URL produces a syntactically valid but unopenable input
+    // such as `https://cdn/live/https://other/live.flv`.
+    if (_isPlayableUrl(live)) return live;
+    // getH5PlayV1 normally separates the CDN base (`rtmp_url`, and on
+    // variants `flv_url`) from the signed media path (`rtmp_live`). A base URL
+    // is syntactically valid HTTP but is not an FFmpeg input. Returning it
+    // early was the direct cause of "input stream address format" failures.
+    for (final baseKey in const <String>['rtmp_url', 'flv_url']) {
+      final base = unescape.convert(data[baseKey]?.toString().trim() ?? '');
+      if (base.isEmpty || live.isEmpty) continue;
+      final combined = '${base.replaceFirst(RegExp(r'/+$'), '')}/${live.replaceFirst(RegExp(r'^/+'), '')}';
+      if (_isPlayableUrl(combined)) return combined;
+    }
+
+    for (final key in const <String>['player_1', 'stream_url', 'url']) {
       final value = unescape.convert(data[key]?.toString().trim() ?? '');
       if (_isPlayableUrl(value)) return value;
     }
 
-    final live = unescape.convert(data['rtmp_live']?.toString().trim() ?? '');
-    if (_isPlayableUrl(live)) return live;
-    final base = unescape.convert(data['rtmp_url']?.toString().trim() ?? '');
-    if (base.isNotEmpty && live.isNotEmpty) {
-      final combined = '${base.replaceFirst(RegExp(r'/+$'), '')}/${live.replaceFirst(RegExp(r'^/+'), '')}';
-      if (_isPlayableUrl(combined)) return combined;
-    }
+    // Compatibility with payloads that expose a complete FLV address without
+    // rtmp_live. Require a media-looking path so a bare CDN directory is never
+    // handed to the recorder again.
+    final flvUrl = unescape.convert(data['flv_url']?.toString().trim() ?? '');
+    if (_isDirectMediaUrl(flvUrl)) return flvUrl;
     throw const DouyuPlayApiException('H5 play response has no playable URL');
   }
 
@@ -259,6 +305,12 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
   static bool _isPlayableUrl(String value) {
     final uri = Uri.tryParse(value);
     return uri != null && uri.host.isNotEmpty && const {'http', 'https', 'rtmp'}.contains(uri.scheme);
+  }
+
+  static bool _isDirectMediaUrl(String value) {
+    if (!_isPlayableUrl(value)) return false;
+    final path = Uri.parse(value).path.toLowerCase();
+    return path.endsWith('.flv') || path.endsWith('.m3u8') || path.endsWith('.mp4');
   }
 
   @override
@@ -324,6 +376,15 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
     return _buildRoom(roomInfo, roomId: roomId);
   }
 
+  @override
+  Future<LiveRoom> getRoomDetailForRecording({required String platform, required String roomId}) async {
+    // Do not use getRoomDetail here: its UI fallback converts a failed betard
+    // request into an offline room, which previously stopped recording before
+    // Douyu signing/getH5PlayV1 was reached.
+    final roomInfo = await _fetchRoomInfo(roomId);
+    return _buildRoom(roomInfo, roomId: roomId);
+  }
+
   Future<Map<dynamic, dynamic>> _fetchRoomInfo(String roomId) async {
     var result = await HttpClient.instance.getJson(
       "https://www.douyu.com/betard/$roomId",
@@ -347,10 +408,8 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
   }
 
   LiveRoom _buildRoom(Map<dynamic, dynamic> roomInfo, {required String roomId}) {
-    final live =
-        roomInfo["show_status"] == 1 &&
-        roomInfo["videoLoop"] != 1 &&
-        !roomInfo["room_name"].toString().startsWith("【回放】");
+    final live = isLiveRoomPayload(roomInfo);
+    final replay = _asInt(roomInfo['videoLoop']) == 1;
 
     return LiveRoom(
       cover: roomInfo["room_pic"].toString(),
@@ -370,8 +429,15 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
       data: null,
       platform: Sites.douyuSite,
       link: "https://www.douyu.com/$roomId",
-      isRecord: roomInfo["videoLoop"] == 1,
+      isRecord: replay,
     );
+  }
+
+  @visibleForTesting
+  static bool isLiveRoomPayload(Map<dynamic, dynamic> roomInfo) {
+    return _asInt(roomInfo['show_status']) == 1 &&
+        _asInt(roomInfo['videoLoop']) != 1 &&
+        !roomInfo['room_name'].toString().startsWith('【回放】');
   }
 
   @override
@@ -455,10 +521,7 @@ class DouyuSite implements LiveSite, LiveSiteRoomRefresher {
   @override
   Future<bool> getLiveStatus({required String platform, required String roomId}) async {
     var roomInfo = await _fetchRoomInfo(roomId);
-
-    return roomInfo["show_status"] == 1 &&
-        roomInfo["videoLoop"] != 1 &&
-        !roomInfo["room_name"].toString().startsWith("【回放】");
+    return isLiveRoomPayload(roomInfo);
   }
 
   int parseHotNum(String hn) {

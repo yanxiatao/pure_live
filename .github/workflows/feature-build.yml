@@ -49,7 +49,7 @@ on:
         description: Release tag (e.g. v1.0.0) – required if create_release is true
         required: true
         type: string
-        default: 'v3.0.4'
+        default: 'v3.0.7'
 
   push:
     tags:
@@ -1446,7 +1446,7 @@ jobs:
           |版本|下载地址|
           |---|---|
           |TV版|[pure_live_TV](https://github.com/liuchuancong/pure_live_TV/releases/latest)|
-          |Windows/macOS/Android/iOS版|[pure_live](https://github.com/liuchuancong/pure_live/releases/latest)|
+          |Windows/macOS/Android/iOS版|[pure_live](https://github.com/yanxiatao/pure_live/releases/latest)|
 
           ### 🖥️ Windows 版
 
@@ -1464,7 +1464,7 @@ jobs:
 
           ### 📱 Android 版
 
-          - Android 6.0+
+          - Android 8.0+（API 26，FFmpegKit 录制依赖要求）
           - ARM64-v8a
           - 提供 SHA256 校验文件
 
