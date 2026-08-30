@@ -43,6 +43,11 @@ on:
         required: true
         type: string
         default: 'v3.0.8'
+      release_sync_note:
+        description: Optional note prepended to the release body (e.g. upstream sync description)
+        required: false
+        type: string
+        default: ""
 
   push:
     tags:
@@ -67,7 +72,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6
         with:
           distribution: zulu
           java-version: "25"
@@ -109,7 +114,7 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6
         with:
           distribution: zulu
           java-version: "25"
@@ -783,7 +788,7 @@ jobs:
           sha256sum --check "$(basename "$checksum_file")"
       - name: Read version description
         id: version
-        uses: juliangruber/read-file-action@v1
+        uses: juliangruber/read-file-action@271ff311a4947af354c6abcd696a306553b9ec18 # v1
         with:
           path: assets/version.json
       - name: Generate BUILD_METADATA.json
@@ -846,11 +851,12 @@ jobs:
         run: |
           set -euo pipefail
           cat << EOF > release_body.txt
+          ${{ inputs.release_sync_note }}
           # 纯粹直播 ${{ inputs.release_tag }}
           |版本|下载地址|
           |---|---|
           |TV版|[pure_live_TV](https://github.com/liuchuancong/pure_live_TV/releases/latest)|
-          |Windows/macOS/Android/iOS版|[pure_live](https://github.com/liuchuancong/pure_live/releases/latest)|
+          |Windows/macOS/Android/iOS版|[pure_live](https://github.com/yanxiatao/pure_live/releases/latest)|
           ### 🖥️ Windows 版
           - **Portable ZIP**：解压即用，无需安装
           - **EXE 安装包**：适合所有用户
@@ -865,7 +871,7 @@ jobs:
           - ARM64-v8a
           - ARMv7
           - x86_64
-          - 统一 SHA256 校验文件：[**ANDROID_SHA256SUM.txt**](https://github.com/liuchuancong/pure_live/releases/download/${{ inputs.release_tag }}/ANDROID_SHA256SUM.txt)
+          - 统一 SHA256 校验文件：[**ANDROID_SHA256SUM.txt**](https://github.com/yanxiatao/pure_live/releases/download/${{ inputs.release_tag }}/ANDROID_SHA256SUM.txt)
           ### 🐧 Linux 版
           - Linux x64
           - Portable tar.gz
@@ -874,13 +880,13 @@ jobs:
           - TrollStore / ad-hoc IPA
           - ARM64
           ### 🔧 Build Metadata
-          [**BUILD_METADATA.json**](https://github.com/liuchuancong/pure_live/releases/download/${{ inputs.release_tag }}/BUILD_METADATA.json)
+          [**BUILD_METADATA.json**](https://github.com/yanxiatao/pure_live/releases/download/${{ inputs.release_tag }}/BUILD_METADATA.json)
           ### 📝 本次更新
           ${{ fromJson(steps.version.outputs.content).version_desc }}
           EOF
           echo "body_path=$(pwd)/release_body.txt" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}

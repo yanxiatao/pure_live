@@ -294,7 +294,7 @@ class HuyaSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomRes
       return playUserAgent!;
     }
 
-    final mirror = GitHubMirror(owner: 'liuchuancong', repo: 'pure_live', branch: 'master');
+    final mirror = GitHubMirror(owner: 'yanxiatao', repo: 'pure_live', branch: 'master');
 
     final urls = mirror.mirrors('assets/play_config.json');
 

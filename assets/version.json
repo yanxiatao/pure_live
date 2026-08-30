@@ -9,7 +9,7 @@
   ],
   "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
   "prerelease": false,
-  "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8",
+  "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8",
   "platforms": {
     "android": {
       "version": "3.0.8",
@@ -17,7 +17,7 @@
       "version_num": 300084096,
       "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
       "prerelease": false,
-      "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8",
+      "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8",
       "android_abis": [
         "armeabi-v7a",
         "arm64-v8a",
@@ -30,7 +30,7 @@
       "version_num": 300084096,
       "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
       "prerelease": false,
-      "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8",
+      "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8",
       "windows_msix_available": true
     },
     "linux": {
@@ -39,7 +39,7 @@
       "version_num": 300084096,
       "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
       "prerelease": false,
-      "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8"
+      "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8"
     },
     "macos": {
       "version": "3.0.8",
@@ -47,7 +47,7 @@
       "version_num": 300084096,
       "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
       "prerelease": false,
-      "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8"
+      "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8"
     },
     "ios": {
       "version": "3.0.8",
@@ -55,7 +55,7 @@
       "version_num": 300084096,
       "version_desc": "version: 3.0.8\n版本更新：\n- 修复huya断流",
       "prerelease": false,
-      "download_url": "https://github.com/liuchuancong/pure_live/releases/tag/v3.0.8"
+      "download_url": "https://github.com/yanxiatao/pure_live/releases/tag/v3.0.8"
     }
   }
 }

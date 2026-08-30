@@ -83,6 +83,9 @@ KEEP_OURS = (
     "lib/player/utils/window_helper.dart",
     "test/multiview_test.dart",
     "test/release_asset_urls_test.dart",
+    # 发布索引由本 fork 的作业生成（结构与上游索引不同）；取上游会丢掉本 fork 的
+    # Release 条目并让文件格式来回翻转。
+    "assets/releases.json",
     "README.md",
     ".github/workflows/sync-upstream.yml",
     ".github/workflows/sign-staged-android.yml",
