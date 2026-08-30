@@ -29,13 +29,16 @@ int compareMultiviewRooms(
 /// 弹窗共用同一份内容。点选直播间后通过 [MultiviewRoomPicker.onPicked]
 /// 回调交由页面调用控制器分配到目标格。
 class MultiviewRoomPicker extends StatefulWidget {
-  const MultiviewRoomPicker({super.key, required this.cellIndex, required this.onPicked});
+  const MultiviewRoomPicker({super.key, required this.cellIndex, required this.onPicked, this.onSearch});
 
   /// 目标格子下标（0 起），标题中展示为 1 起的序号。
   final int cellIndex;
 
   /// 点选直播间后的回调；由页面负责调用 assignRoom 并关闭弹层。
   final void Function(LiveRoom room) onPicked;
+
+  /// 打开跨平台搜索面板；为 null 时不显示入口（本面板只有收藏/历史两个本地源）。
+  final VoidCallback? onSearch;
 
   @override
   State<MultiviewRoomPicker> createState() => _MultiviewRoomPickerState();
@@ -89,6 +92,27 @@ class _MultiviewRoomPickerState extends State<MultiviewRoomPicker> {
       final rooms = _roomsFor(_source);
       return Column(
         children: [
+          if (widget.onSearch != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      i18n('multiview_pick_for_cell', args: {'index': '${widget.cellIndex + 1}'}),
+                      style: AppTextStyles.t13Medium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: widget.onSearch,
+                    icon: const Icon(Remix.search_line, size: 16),
+                    label: Text(i18n('multiview_search_rooms'), style: AppTextStyles.t12),
+                  ),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: TextField(
@@ -128,7 +152,7 @@ class _MultiviewRoomPickerState extends State<MultiviewRoomPicker> {
                     itemBuilder: (context, index) {
                       final room = rooms[index];
                       return ListTile(
-                        leading: _RoomTileLeading(room: room),
+                        leading: MultiviewRoomTileLeading(room: room),
                         title: Text(
                           room.nick ?? '',
                           maxLines: 1,
@@ -141,7 +165,7 @@ class _MultiviewRoomPickerState extends State<MultiviewRoomPicker> {
                           overflow: TextOverflow.ellipsis,
                           style: AppTextStyles.t12Muted,
                         ),
-                        trailing: _LiveStatusBadge(room: room),
+                        trailing: MultiviewLiveStatusBadge(room: room),
                         onTap: () => widget.onPicked(room),
                       );
                     },
@@ -153,9 +177,9 @@ class _MultiviewRoomPickerState extends State<MultiviewRoomPicker> {
   }
 }
 
-/// 列表项头像：主播头像 + 右下角平台徽标。
-class _RoomTileLeading extends StatelessWidget {
-  const _RoomTileLeading({required this.room});
+/// 列表项头像：主播头像 + 右下角平台徽标。选台面板与搜索面板共用。
+class MultiviewRoomTileLeading extends StatelessWidget {
+  const MultiviewRoomTileLeading({super.key, required this.room});
 
   final LiveRoom room;
 
@@ -185,9 +209,9 @@ class _RoomTileLeading extends StatelessWidget {
   }
 }
 
-/// 直播状态标识：开播绿点 / 未开播灰字。
-class _LiveStatusBadge extends StatelessWidget {
-  const _LiveStatusBadge({required this.room});
+/// 直播状态标识：开播绿点 / 未开播灰字。选台面板与搜索面板共用。
+class MultiviewLiveStatusBadge extends StatelessWidget {
+  const MultiviewLiveStatusBadge({super.key, required this.room});
 
   final LiveRoom room;
 

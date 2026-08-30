@@ -1479,5 +1479,17 @@
     "audience_ranking_rule_desc": "Ranking order: explicit concurrent counts first, supported rooms awaiting data next, then heat or cumulative metrics. Equal values use stable platform and room IDs to prevent refresh reshuffling.",
     "audience_yy_detail": "The public users field is platform heat; the current web API does not expose a separate concurrent count",
     "unknown": "Unknown",
-    "import_epg_source": "Import EPG source"
+    "import_epg_source": "Import EPG source",
+    "multiview_more": "More controls",
+    "multiview_audio_focus": "Audio source",
+    "multiview_search_rooms": "Search & add",
+    "multiview_search_placeholder": "Search all platforms by keyword",
+    "multiview_room_id_or_link": "Room ID or share link",
+    "multiview_search_no_result": "No matching live rooms",
+    "multiview_search_failed": "Some platforms failed to search",
+    "multiview_search_start": "Search",
+    "multiview_panel_drag_hint": "Drag the title bar to move; other cells stay clickable",
+    "multiview_unsupported_platform": "This platform is not supported",
+    "multiview_close_panel": "Close",
+    "multiview_cell": "Cell"
 }
