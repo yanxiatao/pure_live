@@ -1033,6 +1033,16 @@ class HuyaSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomRes
     _tokenCache.remove(stream);
   }
 
+  /// Seeds the CDN token cache so URL construction is testable without a live
+  /// request to Huya's token API. Production code never calls this.
+  @visibleForTesting
+  void seedTokenForTest(String stream, String token) {
+    _tokenCache[stream] = _HuyaTokenCacheEntry(
+      token: token,
+      expiresAt: DateTime.now().add(const Duration(days: 3650)),
+    );
+  }
+
   void clearAllTokenCache() {
     _tokenCache.clear();
     _tokenRequests.clear();
