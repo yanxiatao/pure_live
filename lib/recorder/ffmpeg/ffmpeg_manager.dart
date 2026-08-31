@@ -37,7 +37,6 @@ class FFmpegManager {
       // gets one fresh attempt while concurrent callers still share this one.
       if (identical(_initializeFuture, initialization)) {
         _initializeFuture = null;
-        _caFilePath = null;
       }
       Error.throwWithStackTrace(error, stackTrace);
     });
@@ -67,6 +66,11 @@ class FFmpegManager {
   Future<void> stop(String taskId) async {
     await initialize();
     await _ffmpeg.stop(taskId);
+  }
+
+  Future<void> refreshLease(String taskId) async {
+    await initialize();
+    await _ffmpeg.refreshLease(taskId);
   }
 
   bool isRunning(String taskId) {

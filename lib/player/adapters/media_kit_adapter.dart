@@ -1,27 +1,29 @@
 import 'dart:async';
 
 import 'package:rxdart/rxdart.dart';
-
-import '../models/player_state.dart';
-import '../models/player_exception.dart';
-import '../models/player_error_type.dart';
-
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/core/common/log.dart';
-
-import '../interface/unified_player_interface.dart';
-
+import 'package:pure_live/plugins/file_utils.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:pure_live/player/utils/player_consts.dart';
+import 'package:pure_live/player/models/player_state.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
 import 'package:pure_live/player/models/player_engine.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
+import 'package:pure_live/player/models/player_exception.dart';
+import 'package:pure_live/player/models/player_error_type.dart';
 import 'package:pure_live/player/utils/live_buffer_policy.dart';
+import 'package:pure_live/player/shaders/shader_asset_service.dart';
+import 'package:pure_live/player/models/player_super_resolution.dart';
 import 'package:pure_live/common/utils/latest_async_value_queue.dart';
+import 'package:pure_live/player/interface/unified_player_interface.dart';
 import 'package:pure_live/player/interface/media_kit_player_accessor.dart';
 
 @visibleForTesting
 ({int width, int height})? resolveMediaKitDisplaySize(VideoParams params) {
   final size = resolveVideoParamsDisplaySize(params);
+
   return size == null ? null : (width: size.width, height: size.height);
 }
 
@@ -30,82 +32,19 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     _audioModeTransitions = LatestAsyncValueQueue<bool>(_applyAudioOnly);
   }
 
-  /// Applies the shared low-latency live-stream mpv property set to a native
-  /// (libmpv) player platform.
-  ///
-  /// 单一事实来源：主播放器（[MediaKitAdapter.init]）与 multiview 每格播放器
-  /// 都必须使用同一套属性（seek 白名单、探测时长、LiveBufferPolicy 缓冲上限、
-  /// 网络超时、音频驱动、代理、macOS 硬解关闭），避免两处配置漂移。
-  static Future<void> applyNativeLiveProperties(dynamic native) async {
-    await native.setProperty('force-seekable', 'yes');
-    await native.setProperty(
-      'protocol_whitelist',
-      'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto,rtmp,rtmps,rtsp,srt',
-    );
-
-    await native.setProperty('demuxer-lavf-probesize', '2097152');
-
-    // mpv's generic defaults keep a large seek-oriented forward/backward
-    // cache. Live rooms are not meaningfully seekable, so retaining that
-    // much compressed data only makes long Windows/Android sessions appear
-    // to grow indefinitely. Keep this shared with the tested policy rather
-    // than scattering raw byte strings through the adapter.
-    await native.setProperty('demuxer-max-bytes', LiveBufferPolicy.forwardBytes.toString());
-
-    await native.setProperty('demuxer-max-back-bytes', LiveBufferPolicy.backBytes.toString());
-
-    await native.setProperty('demuxer-readahead-secs', LiveBufferPolicy.readaheadSeconds.toString());
-
-    await native.setProperty('network-timeout', '15');
-
-    // Ask mpv to abandon a broken hardware decoder after the first consecutive
-    // frame failure. This preserves the low-power fast path on compatible
-    // devices while making unsupported profiles fall back to software instead
-    // of leaving a black Surface behind. mpv's larger default can skip several
-    // live packets before the fallback is attempted.
-    await native.setProperty('hwdec-software-fallback', '1');
-
-    if (SettingsService.to.player.customPlayerOutput.v) {
-      await native.setProperty('ao', SettingsService.to.player.audioOutputDriver.v);
-    } else if (PlatformUtils.isLinux) {
-      await native.setProperty('ao', 'alsa');
-    }
-
-    if (SettingsService.to.proxy.enableProxy.v && SettingsService.to.proxy.proxyHost.v.isNotEmpty) {
-      final proxyUrl = "http://${SettingsService.to.proxy.proxyHost.v}:${SettingsService.to.proxy.proxyPort.v}";
-
-      await native.setProperty('http-proxy', proxyUrl);
-    }
-
-    if (PlatformUtils.isMacOS) {
-      await native.setProperty('hwdec', 'no');
-    }
-
-    if (PlatformUtils.isWindows && SettingsService.to.player.enableRtxVsr.value) {
-      await native.setProperty('hwdec', 'd3d11va');
-      await native.setProperty('vf', 'd3d11vpp=scale=2:scaling-mode=nvidia');
-    }
-  }
-
   late final Player _player;
-
   late final VideoController _controller;
 
   bool _initialized = false;
-
   bool _disposed = false;
-
   bool _listenerBound = false;
 
   String? _currentUrl;
-
   bool _isAudioOnly = false;
 
-  late final LatestAsyncValueQueue<bool> _audioModeTransitions;
+  SuperResolutionMode _superResolutionMode = SuperResolutionMode.off;
 
-  // =========================
-  // subjects
-  // =========================
+  late final LatestAsyncValueQueue<bool> _audioModeTransitions;
 
   final _stateSubject = BehaviorSubject<PlayerState>.seeded(PlayerState.idle);
 
@@ -121,82 +60,373 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
 
   final _heightSubject = BehaviorSubject<int?>.seeded(null);
 
-  // =========================
-  // subscriptions
-  // =========================
+  final _videoFrameProgressSubject = PublishSubject<int>();
 
   final List<StreamSubscription> _subscriptions = [];
 
   StreamSubscription? _playingSub;
-
   StreamSubscription? _bufferingSub;
-
   StreamSubscription? _videoParamsSub;
-
   StreamSubscription? _completeSub;
-
   StreamSubscription? _errorSub;
 
-  // =========================
-  // init
-  // =========================
+  static Future<void> applyNativeLiveProperties(NativePlayer native) async {
+    await native.setProperty('force-seekable', 'yes');
+
+    await native.setProperty(
+      'protocol_whitelist',
+      'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto,rtmp,rtmps,rtsp,srt',
+    );
+    await native.setProperty("demuxer-cache-dir", await FileUtils().getTempPath());
+
+    await native.setProperty('demuxer-lavf-probesize', '2097152');
+
+    // Live FLV/HLS streams need a short probe rather than a long-file
+    // analysis pass.  This reduces the black-screen interval before the
+    // first decoded frame while retaining enough data for codec detection.
+    await native.setProperty('demuxer-lavf-analyzeduration', '2');
+
+    await native.setProperty('demuxer-max-bytes', LiveBufferPolicy.forwardBytes.toString());
+
+    await native.setProperty('demuxer-max-back-bytes', LiveBufferPolicy.backBytes.toString());
+
+    await native.setProperty('demuxer-readahead-secs', LiveBufferPolicy.readaheadSeconds.toString());
+
+    await native.setProperty('network-timeout', '15');
+
+    await native.setProperty('hwdec-software-fallback', '1');
+
+    await native.setProperty('volume-max', '100');
+
+    await native.setProperty('af', 'scaletempo2=max-speed=8');
+  }
+
+  static Future<void> _configureAndroidCustomOutput(NativePlayer native) async {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return;
+    }
+
+    if (PlatformUtils.isAndroid && settings.playerCompatMode.v) {
+      return;
+    }
+
+    await native.setProperty('ao', settings.androidEnableOpenSLES.v ? 'opensles' : 'audiotrack');
+
+    await native.setProperty('volume-max', '100');
+
+    await native.setProperty('hwdec-software-fallback', '1');
+
+    final hwdec = settings.videoHardwareDecoder.v;
+
+    await native.setProperty('hwdec', hwdec.isEmpty ? 'auto' : hwdec);
+
+    final renderer = settings.videoOutputDriver.v;
+
+    await native.setProperty('vo', renderer.isEmpty || renderer == 'auto' ? 'gpu' : renderer);
+  }
+
+  static Future<void> _configureWindowsCustomOutput(NativePlayer native) async {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return;
+    }
+
+    if (settings.enableRtxVsr.v) {
+      await native.setProperty('vf', 'd3d11vpp=scale=2:scaling-mode=nvidia');
+    }
+  }
+
+  static Future<void> _configureMacOSCustomOutput(NativePlayer native) async {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return;
+    }
+
+    await native.setProperty('hwdec', 'no');
+  }
+
+  static Future<void> _configureLinuxCustomOutput(NativePlayer native) async {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return;
+    }
+
+    await native.setProperty('ao', 'alsa');
+
+    await native.setProperty(
+      'hwdec',
+      settings.videoHardwareDecoder.v.isEmpty ? 'auto' : settings.videoHardwareDecoder.v,
+    );
+  }
+
+  SuperResolutionMode _resolveInitialSuperResolutionMode() {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return SuperResolutionMode.off;
+    }
+
+    if (PlatformUtils.isAndroid && settings.playerCompatMode.v) {
+      return SuperResolutionMode.off;
+    }
+
+    if (PlatformUtils.isIOS) {
+      return SuperResolutionMode.off;
+    }
+
+    if (PlatformUtils.isWindows && settings.enableRtxVsr.v) {
+      return SuperResolutionMode.off;
+    }
+
+    return SuperResolutionMode.fromStorageValue(settings.defaultSuperResolutionMode.v);
+  }
+
+  List<String> _getSuperResolutionShaders() {
+    return switch (_superResolutionMode) {
+      SuperResolutionMode.off => const <String>[],
+      SuperResolutionMode.efficiency => PlayerConsts.mpvAnime4KShadersLiteKeys,
+      SuperResolutionMode.quality => PlayerConsts.mpvAnime4KShaderKeys,
+    };
+  }
+
+  Future<void> _configureSuperResolution() async {
+    if (_disposed) {
+      return;
+    }
+
+    if (_player.platform is! NativePlayer) {
+      return;
+    }
+
+    final native = _player.platform as NativePlayer;
+
+    await native.waitForPlayerInitialization;
+    await native.waitForVideoControllerInitializationIfAttached;
+
+    if (_disposed) {
+      return;
+    }
+
+    final shaders = _getSuperResolutionShaders();
+
+    await _applyShaderList(native, shaders);
+  }
+
+  Future<void> _applyShaderList(NativePlayer native, List<String> shaders) async {
+    if (shaders.isEmpty) {
+      await native.command(['change-list', 'glsl-shaders', 'clr', '']);
+
+      return;
+    }
+
+    final shaderCommand = FileUtils().buildShadersAbsolutePath(
+      ShaderAssetService.instance.shadersDirectoryPath!,
+      shaders,
+    );
+
+    await native.command(['change-list', 'glsl-shaders', 'set', shaderCommand]);
+  }
+
+  Future<void> setSuperResolution(SuperResolutionMode mode) async {
+    if (_disposed) {
+      return;
+    }
+
+    if (_player.platform is! NativePlayer) {
+      return;
+    }
+
+    if (!_isSuperResolutionSupported()) {
+      if (_superResolutionMode != SuperResolutionMode.off) {
+        final oldMode = _superResolutionMode;
+
+        _superResolutionMode = SuperResolutionMode.off;
+
+        try {
+          await _configureSuperResolution();
+        } catch (_) {
+          _superResolutionMode = oldMode;
+        }
+      }
+
+      return;
+    }
+
+    final oldMode = _superResolutionMode;
+
+    if (oldMode == mode) {
+      return;
+    }
+
+    try {
+      _superResolutionMode = mode;
+
+      await _configureSuperResolution();
+
+      Log.i(
+        'MediaKitAdapter: super resolution changed '
+        '${oldMode.name} -> ${mode.name}',
+      );
+    } catch (e, s) {
+      _superResolutionMode = oldMode;
+
+      Log.e('MediaKitAdapter: failed to set super resolution', s);
+
+      try {
+        await _configureSuperResolution();
+      } catch (restoreError, restoreStack) {
+        Log.e(
+          'MediaKitAdapter: failed to restore previous '
+          'super resolution shader',
+          restoreStack,
+        );
+      }
+
+      rethrow;
+    }
+  }
+
+  bool _isSuperResolutionSupported() {
+    final settings = SettingsService.to.player;
+
+    if (!settings.customPlayerOutput.v) {
+      return false;
+    }
+
+    if (PlatformUtils.isAndroid && settings.playerCompatMode.v) {
+      return false;
+    }
+
+    if (PlatformUtils.isIOS) {
+      return false;
+    }
+
+    if (PlatformUtils.isWindows && settings.enableRtxVsr.v) {
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<VideoControllerConfiguration> _buildVideoControllerConfiguration() async {
+    final settings = SettingsService.to.player;
+    final customOutput = settings.customPlayerOutput.v;
+    if (!customOutput) {
+      _superResolutionMode = SuperResolutionMode.off;
+
+      return VideoControllerConfiguration(
+        enableHardwareAcceleration: settings.enableCodec.v,
+        enableAndroidSurfaceProducer: false,
+        androidAttachSurfaceAfterVideoParameters: false,
+      );
+    }
+    if (PlatformUtils.isAndroid && settings.playerCompatMode.v) {
+      _superResolutionMode = SuperResolutionMode.off;
+
+      return const VideoControllerConfiguration(
+        vo: 'mediacodec_embed',
+        hwdec: 'mediacodec',
+        enableHardwareAcceleration: true,
+        enableAndroidSurfaceProducer: false,
+        androidAttachSurfaceAfterVideoParameters: false,
+      );
+    }
+
+    String? vo;
+    String? hwdec;
+    if (PlatformUtils.isAndroid) {
+      final renderer = settings.videoOutputDriver.v;
+
+      if (renderer.isEmpty || renderer == 'auto') {
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        vo = androidInfo.version.sdkInt >= 34 ? 'gpu-next' : 'gpu';
+      } else {
+        vo = renderer;
+      }
+      hwdec = settings.videoHardwareDecoder.v.isEmpty ? 'auto' : settings.videoHardwareDecoder.v;
+    } else if (PlatformUtils.isWindows) {
+      vo = settings.videoOutputDriver.v;
+      if (settings.enableRtxVsr.v) {
+        hwdec = 'd3d11va';
+      } else {
+        hwdec = settings.videoHardwareDecoder.v.isEmpty ? 'auto' : settings.videoHardwareDecoder.v;
+      }
+    } else if (PlatformUtils.isLinux) {
+      vo = settings.videoOutputDriver.v;
+      hwdec = settings.videoHardwareDecoder.v.isEmpty ? 'auto' : settings.videoHardwareDecoder.v;
+    } else if (PlatformUtils.isMacOS) {
+      vo = settings.videoOutputDriver.v;
+      hwdec = 'no';
+    } else if (PlatformUtils.isIOS) {
+      vo = null;
+      hwdec = settings.videoHardwareDecoder.v.isEmpty ? 'auto' : settings.videoHardwareDecoder.v;
+    }
+
+    final enableHardwareAcceleration = PlatformUtils.isMacOS ? false : settings.enableCodec.v;
+
+    return VideoControllerConfiguration(
+      vo: vo,
+      hwdec: hwdec,
+      enableHardwareAcceleration: enableHardwareAcceleration,
+      enableAndroidSurfaceProducer: false,
+      androidAttachSurfaceAfterVideoParameters: false,
+    );
+  }
 
   @override
   Future<void> init({bool audioOnly = false}) async {
-    if (_initialized) return;
-    // Always create a normal video output. Audio-only is a reversible track
-    // selection on the same player; constructing a `vo=null` controller made
-    // returning to video depend on destroying and recreating the native player.
-    _disposed = false;
+    if (_initialized) {
+      return;
+    }
 
-    // This is application presentation state. On Android the attached
-    // media_kit VideoController is the sole owner of mpv's `vid` property.
+    _disposed = false;
+    _listenerBound = false;
+    _currentUrl = null;
     _isAudioOnly = false;
 
-    _listenerBound = false;
-
-    _currentUrl = null;
+    _superResolutionMode = _resolveInitialSuperResolutionMode();
 
     try {
       _stateSubject.add(PlayerState.initializing);
 
       MediaKit.ensureInitialized();
-      _player = Player();
+
+      final settings = SettingsService.to.player;
+
+      _player = Player(configuration: const PlayerConfiguration(osc: false));
 
       if (_player.platform is NativePlayer) {
-        final native = _player.platform as dynamic;
-        // Live adapters use one explicit seekability override. The upstream
-        // Android workaround duplicated this native property write.
+        final native = _player.platform as NativePlayer;
+
         await applyNativeLiveProperties(native);
+
+        if (settings.customPlayerOutput.v && !(PlatformUtils.isAndroid && settings.playerCompatMode.v)) {
+          if (PlatformUtils.isAndroid) {
+            await _configureAndroidCustomOutput(native);
+          } else if (PlatformUtils.isWindows) {
+            await _configureWindowsCustomOutput(native);
+          } else if (PlatformUtils.isMacOS) {
+            await _configureMacOSCustomOutput(native);
+          } else if (PlatformUtils.isLinux) {
+            await _configureLinuxCustomOutput(native);
+          }
+        }
       }
 
-      // =========================
-      // controller
-      // =========================
-      _controller = SettingsService.to.player.playerCompatMode.v
-          ? VideoController(
-              _player,
-              configuration: const VideoControllerConfiguration(vo: 'mediacodec_embed', hwdec: 'mediacodec'),
-            )
-          : SettingsService.to.player.customPlayerOutput.v
-          ? VideoController(
-              _player,
-              configuration: VideoControllerConfiguration(
-                vo: SettingsService.to.player.videoOutputDriver.v,
-                hwdec: PlatformUtils.isMacOS ? 'no' : SettingsService.to.player.videoHardwareDecoder.v,
-                enableHardwareAcceleration: !PlatformUtils.isMacOS,
-              ),
-            )
-          : VideoController(
-              _player,
-              configuration: VideoControllerConfiguration(
-                enableHardwareAcceleration: PlatformUtils.isMacOS ? false : SettingsService.to.player.enableCodec.v,
-                hwdec: PlatformUtils.isMacOS ? 'no' : null,
-                androidAttachSurfaceAfterVideoParameters: false,
-              ),
-            );
+      _controller = VideoController(_player, configuration: await _buildVideoControllerConfiguration());
 
       await _bindListeners();
+
+      if (_superResolutionMode != SuperResolutionMode.off) {
+        await _configureSuperResolution();
+      }
+
+      await _player.setPlaylistMode(PlaylistMode.none);
 
       _initialized = true;
 
@@ -215,10 +445,6 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     }
   }
 
-  // =========================
-  // datasource
-  // =========================
-
   @override
   Future<void> setDataSource(
     String url,
@@ -227,11 +453,14 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     LiveRoom? room,
     bool audioOnly = false,
   }) async {
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
 
     if (_currentUrl == url && isPlayingNow) {
       return;
     }
+
     _currentUrl = url;
 
     try {
@@ -242,23 +471,38 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
       _completeSubject.add(false);
 
       _widthSubject.add(null);
-
       _heightSubject.add(null);
 
-      await _player.open(Media(url, httpHeaders: headers), play: true);
+      if (_player.platform is NativePlayer) {
+        final native = _player.platform as NativePlayer;
 
-      // mpv opens a normal Android source with `vid=auto`, and the Surface
-      // controller already owns that same initial state. Reissuing an async
-      // `vid=auto` command here can stay pending after the first frame is
-      // visible; the room controller's initialization Future then never
-      // completes and the first headphone tap waits on a stream that is already
-      // playing. Audio-only still needs an explicit post-open selection.
+        final proxy = SettingsService.to.proxy;
+
+        if (proxy.enableProxy.v && proxy.proxyHost.v.isNotEmpty) {
+          final proxyUrl = 'http://${proxy.proxyHost.v}:${proxy.proxyPort.v}';
+
+          await native.setProperty('http-proxy', proxyUrl);
+        }
+
+        await native.setProperty('vid', audioOnly ? 'no' : 'auto');
+      }
+
+      await _player.setAudioTrack(AudioTrack.auto());
+
+      final urls = <String>[url, ...playUrls.where((item) => item.isNotEmpty && item != url)];
+
+      final playlist = Playlist(urls.map((item) => Media(item, httpHeaders: headers)).toList());
+
+      await _player.open(playlist, play: true);
+
       if (PlatformUtils.isAndroid && !audioOnly) {
         _isAudioOnly = false;
       } else {
         await _applyAudioOnly(audioOnly, force: true);
       }
-
+      if (_superResolutionMode != SuperResolutionMode.off) {
+        await _configureSuperResolution();
+      }
       _stateSubject.add(PlayerState.ready);
 
       if (PlatformUtils.isMobile) {
@@ -287,24 +531,20 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     }
   }
 
-  // =========================
-  // listeners
-  // =========================
-
   Future<void> _bindListeners() async {
-    if (_listenerBound) return;
+    if (_listenerBound) {
+      return;
+    }
 
     _listenerBound = true;
 
     await _cancelAllSubscriptions();
 
-    // =========================
-    // playing
-    // =========================
-
     _playingSub = _player.stream.playing.listen(
       (playing) {
-        if (_disposed) return;
+        if (_disposed) {
+          return;
+        }
 
         _playingSubject.add(playing);
 
@@ -314,17 +554,16 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
       },
       onError: (e, s) {
         Log.e(e, s);
+
         _emitError(e, s, PlayerErrorType.native);
       },
     );
 
-    // =========================
-    // buffering
-    // =========================
-
     _bufferingSub = _player.stream.buffering.listen(
       (loading) {
-        if (_disposed) return;
+        if (_disposed) {
+          return;
+        }
 
         _loadingSubject.add(loading);
 
@@ -336,30 +575,35 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
       },
       onError: (e, s) {
         Log.e(e, s);
+
         _emitError(e, s, PlayerErrorType.native);
       },
     );
 
-    // Keep width and height from the same decoder-parameter event. Listening
-    // to the two derived streams independently allowed a transient width from
-    // one quality/rotation state to be paired with the previous height. That
-    // malformed ratio was then propagated into portrait detection and PiP.
-    _videoParamsSub = _player.stream.videoParams.listen((params) {
-      if (_disposed) return;
-      final size = resolveMediaKitDisplaySize(params);
-      _widthSubject.add(size?.width);
-      _heightSubject.add(size?.height);
-    });
+    _videoParamsSub = _player.stream.videoParams.listen(
+      (params) {
+        if (_disposed) {
+          return;
+        }
 
-    // =========================
-    // completed
-    // =========================
+        final size = resolveMediaKitDisplaySize(params);
+
+        _widthSubject.add(size?.width);
+
+        _heightSubject.add(size?.height);
+      },
+      onError: (e, s) {
+        Log.e(e, s);
+
+        _emitError(e, s, PlayerErrorType.native);
+      },
+    );
 
     _completeSub = _player.stream.completed.listen(
       (completed) {
-        if (_disposed) return;
-
-        if (!completed) return;
+        if (_disposed || !completed) {
+          return;
+        }
 
         _completeSubject.add(true);
 
@@ -367,34 +611,32 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
       },
       onError: (e, s) {
         Log.e(e, s);
+
         _emitError(e, s, PlayerErrorType.native);
       },
     );
 
-    // =========================
-    // error
-    // =========================
+    _errorSub = _player.stream.error.distinct().listen(
+      (error) {
+        if (_disposed) {
+          return;
+        }
 
-    _errorSub = _player.stream.error.distinct().listen((error) {
-      if (_disposed) return;
+        final type = _mapErrorType(error.toString());
 
-      final type = _mapErrorType(error.toString());
+        _safeAddError(PlayerException(message: error.toString(), type: type));
 
-      _safeAddError(PlayerException(message: error.toString(), type: type));
+        _stateSubject.add(PlayerState.error);
+      },
+      onError: (e, s) {
+        Log.e(e, s);
 
-      _stateSubject.add(PlayerState.error);
-    });
-
-    // =========================
-    // collect
-    // =========================
+        _emitError(e, s, PlayerErrorType.native);
+      },
+    );
 
     _subscriptions.addAll([_playingSub!, _bufferingSub!, _videoParamsSub!, _completeSub!, _errorSub!]);
   }
-
-  // =========================
-  // cancel subscriptions
-  // =========================
 
   Future<void> _cancelAllSubscriptions() async {
     for (final sub in _subscriptions) {
@@ -410,12 +652,10 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     _errorSub = null;
   }
 
-  // =========================
-  // emit error
-  // =========================
-
   void _emitError(Object error, StackTrace stackTrace, PlayerErrorType type) {
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
 
     _safeAddError(PlayerException(message: error.toString(), type: type, error: error, stackTrace: stackTrace));
 
@@ -423,16 +663,12 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   }
 
   void _safeAddError(PlayerException exception) {
-    if (_disposed) return;
-
-    if (_errorSubject.isClosed) return;
+    if (_disposed || _errorSubject.isClosed) {
+      return;
+    }
 
     _errorSubject.add(exception);
   }
-
-  // =========================
-  // error type
-  // =========================
 
   PlayerErrorType _mapErrorType(String error) {
     final lower = error.toLowerCase();
@@ -452,17 +688,15 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     if (lower.contains('surface') || lower.contains('texture')) {
       return PlayerErrorType.texture;
     }
+
     Log.d(error);
+
     return PlayerErrorType.native;
   }
 
-  // =========================
-  // widget
-  // =========================
-
   @override
   Widget getVideoWidget(BoxFit fit) {
-    final video = StreamBuilder<List<int?>>(
+    return StreamBuilder<List<int?>>(
       stream: CombineLatestStream.list<int?>([_widthSubject, _heightSubject]),
       builder: (context, snapshot) {
         final width = snapshot.data?[0];
@@ -484,13 +718,7 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
         );
       },
     );
-
-    return video;
   }
-
-  // =========================
-  // play
-  // =========================
 
   @override
   Future<void> play() async {
@@ -505,23 +733,25 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   @override
   Future<void> stop() async {
     await _player.pause();
+
     _stateSubject.add(PlayerState.stopped);
   }
 
   @override
   Future<void> softStop() async {
-    // Pausing a live source keeps its demuxer, decoder, audio track and network
-    // buffers alive. That left the home/settings UI competing with an invisible
-    // room for CPU and hundreds of MiB after navigation. Unload the current
-    // media while retaining the native Player object for a fast next open.
     await _player.setVolume(0.0);
+
     await _player.stop();
+
     _currentUrl = null;
     _isAudioOnly = false;
+
     _playingSubject.add(false);
     _loadingSubject.add(false);
+
     _widthSubject.add(null);
     _heightSubject.add(null);
+
     _stateSubject.add(PlayerState.stopped);
   }
 
@@ -530,32 +760,31 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     if (!_audioModeTransitions.isRunning && _isAudioOnly == audioOnly) {
       return Future<void>.value();
     }
+
     return _audioModeTransitions.submit(audioOnly);
   }
 
   Future<void> _applyAudioOnly(bool audioOnly, {bool force = false}) async {
-    if (_disposed) return;
-    if (!force && _isAudioOnly == audioOnly) return;
+    if (_disposed) {
+      return;
+    }
+
+    if (!force && _isAudioOnly == audioOnly) {
+      return;
+    }
 
     try {
       if (PlatformUtils.isAndroid) {
-        // Android's patched video controller serializes `vid` with WID/Surface
-        // updates. Disabling decode here saves battery during long ASMR sessions
-        // while retaining the same player, demuxer and network connection.
         if (audioOnly) {
           await _controller.setVideoOutputEnabled(false);
         } else {
           await _restoreAndroidVideoOutput();
         }
       } else {
-        // Desktop video outputs do not rewrite `vid` while their surface is
-        // resized, so changing the decoded track is safe and saves resources.
-        final track = audioOnly ? VideoTrack.no() : VideoTrack.auto();
-        await _player.setVideoTrack(track);
+        await _player.setVideoTrack(audioOnly ? VideoTrack.no() : VideoTrack.auto());
       }
 
       _isAudioOnly = audioOnly;
-      if (_disposed) return;
     } catch (error, stackTrace) {
       throw PlayerException(
         message: 'MediaKit audio mode switch failed',
@@ -566,49 +795,39 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     }
   }
 
-  /// Enables Android video and waits for mpv to publish fresh decoded-video
-  /// parameters before the room removes its audio presentation. This is an
-  /// adaptive keyframe fence rather than an arbitrary fixed delay: fast streams
-  /// reveal immediately, while a slow GOP remains covered by the room artwork
-  /// instead of showing a black texture.
   Future<void> _restoreAndroidVideoOutput() async {
     final frameReady = Completer<void>();
+
     var armed = false;
-    final stopwatch = Stopwatch()..start();
+
     final subscription = _player.stream.videoParams.listen((params) {
       final width = params.dw ?? params.w ?? 0;
+
       final height = params.dh ?? params.h ?? 0;
+
       if (armed && width > 0 && height > 0 && !frameReady.isCompleted) {
         frameReady.complete();
       }
     });
 
     try {
-      // The stream is broadcast, but arm after attaching the listener so a
-      // stale cached state can never be mistaken for the next decoded frame.
       armed = true;
+
       await _controller.setVideoOutputEnabled(true);
 
       var observedFreshFrame = true;
+
       await frameReady.future.timeout(
         const Duration(milliseconds: 2800),
         onTimeout: () {
           observedFreshFrame = false;
         },
       );
+
       if (observedFreshFrame) {
-        // video-params precedes texture composition by a very small interval.
-        // Two display frames keep the cover in place until the GPU texture has
-        // had a chance to present without adding a user-visible fixed pause.
         await Future<void>.delayed(const Duration(milliseconds: 34));
-      } else {
-        debugPrint(
-          'MediaKitAdapter: video restore readiness timed out after '
-          '${stopwatch.elapsedMilliseconds} ms; revealing the live texture',
-        );
       }
     } finally {
-      stopwatch.stop();
       await subscription.cancel();
     }
   }
@@ -620,18 +839,49 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     await _player.setVolume(vol);
   }
 
-  // =========================
-  // dispose
-  // =========================
+  Future<void> setPlaybackSpeed(double speed) async {
+    await _player.setRate(speed);
+  }
+
+  Future<void> setProperty(String property, String value) async {
+    if (_disposed) {
+      return;
+    }
+
+    if (_player.platform is! NativePlayer) {
+      return;
+    }
+
+    final native = _player.platform as NativePlayer;
+
+    await native.setProperty(property, value);
+  }
+
+  Future<void> setPrefetchSuspended(bool suspended) async {
+    if (!PlatformUtils.isAndroid || _disposed) {
+      return;
+    }
+
+    if (_player.platform is! NativePlayer) {
+      return;
+    }
+
+    final native = _player.platform as NativePlayer;
+
+    await native.setProperty('cache-secs', suspended ? '0' : '36000');
+
+    await native.setProperty('demuxer-readahead-secs', suspended ? '0' : LiveBufferPolicy.readaheadSeconds.toString());
+  }
 
   @override
   Future<void> hardDispose() async {
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
 
     _disposed = true;
 
     _initialized = false;
-
     _listenerBound = false;
 
     await _cancelAllSubscriptions();
@@ -639,8 +889,6 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
     try {
       await _player.stop();
     } catch (_) {}
-
-    await Future.delayed(const Duration(milliseconds: 300));
 
     try {
       await _player.dispose();
@@ -654,12 +902,9 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
       _completeSubject.close(),
       _widthSubject.close(),
       _heightSubject.close(),
+      _videoFrameProgressSubject.close(),
     ]);
   }
-
-  // =========================
-  // getter
-  // =========================
 
   @override
   bool get isInitialized => _initialized;
@@ -668,19 +913,21 @@ class MediaKitAdapter implements UnifiedPlayer, MediaKitPlayerAccessor {
   bool get isPlayingNow => _playingSubject.value;
 
   @override
-  bool get isReusable => false;
+  bool get isReusable => PlatformUtils.isWindows;
+
+  SuperResolutionMode get superResolutionMode => _superResolutionMode;
 
   @override
   Stream<PlayerState> get onStateChanged => _stateSubject.stream;
 
   @override
-  Stream<bool> get onPlaying => _playingSubject.stream;
+  Stream<bool> get onPlaying => _playingSubject.stream.distinct();
 
   @override
   Stream<PlayerException> get onError => _errorSubject.stream;
 
   @override
-  Stream<bool> get onLoading => _loadingSubject.stream;
+  Stream<bool> get onLoading => _loadingSubject.stream.distinct();
 
   @override
   Stream<bool> get onComplete => _completeSubject.stream;

@@ -99,6 +99,58 @@ class Sites {
     };
   }
 
+  static LinearGradient gradientOf(String id) {
+    return switch (id.trim().toLowerCase()) {
+      // 哔哩哔哩
+      Sites.bilibiliSite => const LinearGradient(colors: [Color(0xFFFF8FB1), Color(0xFFFB7299)]),
+
+      // 斗鱼
+      Sites.douyuSite => const LinearGradient(colors: [Color(0xFFFF9A3D), Color(0xFFFF7700)]),
+
+      // 虎牙
+      Sites.huyaSite => const LinearGradient(colors: [Color(0xFFFFD05A), Color(0xFFFFB000)]),
+
+      // 抖音
+      Sites.douyinSite => const LinearGradient(colors: [Color(0xFF333333), Color(0xFF000000)]),
+
+      // 快手
+      Sites.kuaishouSite => const LinearGradient(colors: [Color(0xFFFF7540), Color(0xFFFF4906)]),
+
+      // CC
+      Sites.ccSite => const LinearGradient(colors: [Color(0xFF42B5FF), Color(0xFF0D91E9)]),
+
+      // IPTV
+      Sites.iptvSite => const LinearGradient(colors: [Color(0xFFE96A2C), Color(0xFFCC4709)]),
+
+      // Twitch
+      Sites.twitchSite => const LinearGradient(colors: [Color(0xFFB47AFF), Color(0xFF9146FF)]),
+
+      // SOOP
+      Sites.soopSite => const LinearGradient(colors: [Color(0xFF00C8FF), Color(0xFF008AFF)]),
+
+      // YY
+      Sites.yySite => const LinearGradient(colors: [Color(0xFFFFF06A), Color(0xFFFFE600)]),
+
+      _ => const LinearGradient(colors: [Color(0xFF35EF9B), Color(0xFF0BDF75)]),
+    };
+  }
+
+  static String? logoOf(String id) {
+    return switch (id.trim().toLowerCase()) {
+      bilibiliSite => "assets/images/bilibili_2.png",
+      douyuSite => "assets/images/douyu.png",
+      huyaSite => "assets/images/huya.png",
+      douyinSite => "assets/images/douyin.png",
+      kuaishouSite => "assets/images/kuaishou.png",
+      ccSite => "assets/images/cc.png",
+      iptvSite => "assets/images/logo.png",
+      twitchSite => "assets/images/twitch.png",
+      soopSite => "assets/images/soop.png",
+      yySite => "assets/images/yy.png",
+      _ => null,
+    };
+  }
+
   List<Site> availableSites({bool containsAll = false}) {
     final List<String> savedIds = SettingsService.to.fav.hotAreasList.v;
     final supportedById = {for (final site in supportSites) site.id: site};

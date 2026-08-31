@@ -1,7 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:pure_live/get/get.dart';
+import 'package:pure_live/common/index.dart';
 import 'package:syncfusion_flutter_sliders/sliders.dart';
-import 'package:pure_live/common/style/app_text_styles.dart';
 
 extension AppLayoutFactory on BuildContext {
   Widget buildGroupTitle(String text) {
@@ -15,6 +14,47 @@ extension AppLayoutFactory on BuildContext {
           color: theme.colorScheme.primary.withValues(alpha: 0.65),
           letterSpacing: 0.5,
         ),
+      ),
+    );
+  }
+
+  Widget buildPlatformTag(String platform, {bool mini = false}) {
+    final theme = Theme.of(this);
+    final id = platform.trim().toLowerCase();
+
+    final site = Sites.supportSites.firstWhere((e) => e.id == id);
+
+    final gradient = Sites.gradientOf(id);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: mini ? 5 : 7, vertical: mini ? 2 : 4),
+      decoration: BoxDecoration(
+        gradient: gradient,
+        borderRadius: BorderRadius.circular(999),
+        border: isDark ? Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.5) : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: mini ? 13 : 16,
+            height: mini ? 13 : 16,
+            padding: EdgeInsets.all(mini ? 1.8 : 2),
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.9), shape: BoxShape.circle),
+            child: Image.asset(site.logo, fit: BoxFit.contain),
+          ),
+          SizedBox(width: mini ? 3 : 4),
+          Text(
+            i18n('site_$id'),
+            style: AppTextStyles.t11.copyWith(
+              color: Colors.white,
+              fontSize: mini ? 8 : 9,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -116,29 +156,37 @@ extension AppLayoutFactory on BuildContext {
     Color? iconColor,
     Color? subtitleColor,
     bool isLong = false,
+    bool enabled = true,
     ValueChanged<bool>? onChanged,
   }) {
     final theme = Theme.of(this);
+
     return Obx(
       () => SwitchListTile(
-        secondary: icon != null ? Icon(icon, color: iconColor ?? theme.colorScheme.primary, size: 22) : null,
+        secondary: icon != null
+            ? Icon(icon, color: enabled ? (iconColor ?? theme.colorScheme.primary) : theme.disabledColor, size: 22)
+            : null,
         title: Text(title, style: AppTextStyles.t15.copyWith(fontWeight: FontWeight.w600)),
         subtitle: subtitle != null && subtitle.isNotEmpty
             ? Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   subtitle,
-                  style: AppTextStyles.t12.copyWith(color: subtitleColor ?? theme.hintColor.withValues(alpha: 0.75)),
+                  style: AppTextStyles.t12.copyWith(
+                    color: enabled ? (subtitleColor ?? theme.hintColor.withValues(alpha: 0.75)) : theme.disabledColor,
+                  ),
                   maxLines: isLong ? null : 1,
                   overflow: isLong ? TextOverflow.visible : TextOverflow.ellipsis,
                 ),
               )
             : null,
         value: value.value,
-        onChanged: (val) {
-          value.value = val;
-          onChanged?.call(val);
-        },
+        onChanged: enabled
+            ? (val) {
+                value.value = val;
+                onChanged?.call(val);
+              }
+            : null,
         contentPadding: const EdgeInsets.only(left: 16, top: 2, bottom: 2, right: 8),
       ),
     );
@@ -154,6 +202,7 @@ extension AppLayoutFactory on BuildContext {
     Color? subtitleColor,
     Widget? trailing,
     bool isLong = false,
+    bool enabled = true,
   }) {
     final theme = Theme.of(this);
 
@@ -191,13 +240,23 @@ extension AppLayoutFactory on BuildContext {
       minVerticalPadding: 0,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: leadingWidget,
-      title: Text(title, style: AppTextStyles.t15.copyWith(fontWeight: FontWeight.w600)),
+      title: Text(
+        title,
+        style: AppTextStyles.t15.copyWith(
+          fontWeight: FontWeight.w600,
+          color: enabled ? null : theme.hintColor.withValues(alpha: 0.4),
+        ),
+      ),
       subtitle: subtitle != null && subtitle.isNotEmpty
           ? Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
                 subtitle,
-                style: AppTextStyles.t12.copyWith(color: subtitleColor ?? theme.hintColor.withValues(alpha: 0.75)),
+                style: AppTextStyles.t12.copyWith(
+                  color:
+                      subtitleColor ??
+                      (enabled ? theme.hintColor.withValues(alpha: 0.75) : theme.hintColor.withValues(alpha: 0.25)),
+                ),
                 maxLines: isLong ? null : 1,
                 overflow: isLong ? TextOverflow.visible : TextOverflow.ellipsis,
               ),
@@ -212,12 +271,19 @@ extension AppLayoutFactory on BuildContext {
             child:
                 trailing ??
                 (onTap != null
-                    ? Icon(Icons.chevron_right_rounded, color: theme.hintColor.withValues(alpha: 0.4), size: 20)
+                    ? Icon(
+                        Icons.chevron_right_rounded,
+                        color: enabled
+                            ? theme.hintColor.withValues(alpha: 0.4)
+                            : theme.hintColor.withValues(alpha: 0.15),
+                        size: 20,
+                      )
                     : null),
           ),
         ],
       ),
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
+      enabled: enabled,
     );
   }
 

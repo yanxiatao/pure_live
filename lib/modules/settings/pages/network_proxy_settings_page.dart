@@ -1,6 +1,17 @@
 import 'package:flutter/services.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/core/common/proxy_routing.dart';
+
+final TextInputFormatter _proxyHostInputFormatter = TextInputFormatter.withFunction((oldValue, newValue) {
+  final normalized = normalizeProxyHost(newValue.text);
+  if (normalized == newValue.text) return newValue;
+  return TextEditingValue(
+    text: normalized,
+    selection: TextSelection.collapsed(offset: normalized.length),
+    composing: TextRange.empty,
+  );
+});
 
 class NetworkProxySettingsPage extends StatefulWidget {
   const NetworkProxySettingsPage({super.key});
@@ -16,7 +27,6 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
   late final TextEditingController _appPortController;
   late final TextEditingController _playerHostController;
   late final TextEditingController _playerPortController;
-  late final TextEditingController _twitchProxiesController;
 
   @override
   void initState() {
@@ -25,7 +35,6 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
     _appPortController = TextEditingController(text: proxyCtrl.appProxyPort.v.toString());
     _playerHostController = TextEditingController(text: proxyCtrl.proxyHost.v);
     _playerPortController = TextEditingController(text: proxyCtrl.proxyPort.v.toString());
-    _twitchProxiesController = TextEditingController(text: proxyCtrl.twitchProxyPlaylists.v);
   }
 
   @override
@@ -34,7 +43,6 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
     _appPortController.dispose();
     _playerHostController.dispose();
     _playerPortController.dispose();
-    _twitchProxiesController.dispose();
     super.dispose();
   }
 
@@ -67,13 +75,17 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
                         flex: 3,
                         child: TextField(
                           controller: _appHostController,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          inputFormatters: [_proxyHostInputFormatter],
                           decoration: InputDecoration(
                             labelText: i18n("proxy_address_label"),
                             hintText: "127.0.0.1",
                             border: const OutlineInputBorder(),
                             isDense: true,
                           ),
-                          onChanged: (val) => proxyCtrl.appProxyHost.v = val.trim(),
+                          onChanged: (val) => proxyCtrl.appProxyHost.v = normalizeProxyHost(val),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -120,13 +132,17 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
                         flex: 3,
                         child: TextField(
                           controller: _playerHostController,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          inputFormatters: [_proxyHostInputFormatter],
                           decoration: InputDecoration(
                             labelText: i18n("proxy_address_label"),
                             hintText: "127.0.0.1",
                             border: const OutlineInputBorder(),
                             isDense: true,
                           ),
-                          onChanged: (val) => proxyCtrl.proxyHost.v = val.trim(),
+                          onChanged: (val) => proxyCtrl.proxyHost.v = normalizeProxyHost(val),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -152,31 +168,6 @@ class _NetworkProxySettingsPageState extends State<NetworkProxySettingsPage> {
                   ),
                 ),
               ],
-            ]),
-            const SizedBox(height: 24),
-            context.buildGroupTitle(i18n("twitch_proxy_group_title")),
-            context.buildModernCard([
-              SwitchListTile(
-                secondary: Icon(Remix.twitch_line, color: theme.colorScheme.primary),
-                title: Text(i18n("enable_twitch_proxy")),
-                subtitle: Text(i18n("enable_twitch_proxy_desc")),
-                value: proxyCtrl.enableTwitchProxy.v,
-                onChanged: (val) => proxyCtrl.enableTwitchProxy.v = val,
-              ),
-              if (proxyCtrl.enableTwitchProxy.v)
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: TextField(
-                    controller: _twitchProxiesController,
-                    decoration: InputDecoration(
-                      labelText: i18n("twitch_proxy_playlists_label"),
-                      hintText: "api.ttv.lol,eu.luminous.dev",
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onChanged: (val) => proxyCtrl.twitchProxyPlaylists.v = val.trim(),
-                  ),
-                ),
             ]),
             const SizedBox(height: 32),
           ],

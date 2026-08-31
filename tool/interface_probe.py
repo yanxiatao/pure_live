@@ -365,7 +365,10 @@ def yy_anchor_search_probe() -> None:
     if not isinstance(rooms, list):
         raise ValueError("YY recommendation returned no rooms")
     names = [str(room.get("name", "")).strip() for room in rooms if isinstance(room, dict)]
-    keywords = [name for name in names if name][:5] + ["YY"]
+    sids = [str(room.get("sid", "")).strip() for room in rooms if isinstance(room, dict)]
+    # A numeric sid leads the candidates: anchor display names can arrive
+    # mojibake'd and miss the index, while a sid keyword is deterministic.
+    keywords = [sid for sid in sids if sid][:1] + [name for name in names if name][:5] + ["YY"]
     errors: list[str] = []
     contract_alive = False
     for keyword in keywords:

@@ -1,8 +1,7 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/pubspec.json
 name: pure_live
 description: 纯粹直播,一款开源的第三方多平台直播聚合播放器.
 publish_to: none
-version: 3.0.8+4096
+version: 3.0.9+4097
 
 environment:
   sdk: ^3.13.0
@@ -77,7 +76,14 @@ dependencies:
     path: plugins/built_in_kotlin/better_player_plus # Local AGP 9 Built‑in Kotlin patch
 
   audio_service: ^0.18.18 # 后台音频服务
-  audio_service_win: ^0.0.3
+  audio_service_mpris:
+    git:
+      url: https://github.com/Predidit/audio-service-mpris.git
+      ref: d30b53fb7dbdd8f10ceda7447fe0a0218711a220
+  audio_service_win:
+    git:
+      url: https://github.com/Predidit/audio_service_win.git
+      ref: 8ad650c6eb487208b9861d44755c8e58db061c88
   audio_session: ^0.2.3 # 音频会话管理
   ffmpeg_kit_extended_flutter: ^0.6.0
 
@@ -269,6 +275,7 @@ flutter:
     - assets/images/
     - assets/images/video/
     - assets/icons/
+    - assets/shaders/
     - assets/webdav/
     - assets/version.json
     - assets/releases.json
