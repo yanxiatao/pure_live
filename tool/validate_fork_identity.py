@@ -139,7 +139,7 @@ def check_dispatch_contract(report: Report) -> None:
 
 
 def check_fork_features(report: Report) -> None:
-    for marker in ("lib/modules/multiview/multiview_page.dart", "lib/modules/account/edge_cookie_capture.dart",
+    for marker in ("lib/modules/multiview/multiview_page.dart", "lib/modules/account/web_cookie_capture.dart",
                    "lib/player/utils/pip_window_widget.dart", "test/multiview_test.dart"):
         report.check("V9_fork_feature", marker, "fork-only file must exist", (fi.ROOT / marker).exists())
     for symbol, declaring_file in fi.MUST_HAVE_CALLERS.items():

@@ -2,6 +2,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:pure_live/common/index.dart';
+import 'package:pure_live/core/common/cookie_string.dart';
 import 'package:pure_live/modules/search/web_search_room_parser.dart';
 import 'package:pure_live/plugins/utils.dart';
 import 'package:pure_live/core/common/log.dart';
@@ -41,10 +42,51 @@ class WebSearchController extends GetxController {
     if (!opened) ToastUtil.show(i18n('external_browser_not_opened'));
   }
 
-  void onWebViewCreated(InAppWebViewController controller) {
+  /// 各平台 Cookie 归属域名（注入时用父域，保证子域请求携带）。
+  static const Map<String, String> _cookieDomains = {
+    'bilibili': '.bilibili.com',
+    'huya': '.huya.com',
+    'douyin': '.douyin.com',
+    'kuaishou': '.kuaishou.com',
+    'twitch': '.twitch.tv',
+    'soop': '.sooplive.co.kr',
+    'yy': '.yy.com',
+  };
+
+  void onWebViewCreated(InAppWebViewController controller) async {
     webViewController = controller;
-    Log.i("🛠️ WebView 实例创建成功，开始加载 URL");
+    Log.i("🛠️ WebView 实例创建成功，开始注入已配置 Cookie 并加载 URL");
+    await _injectConfiguredCookie();
     webViewController!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+  }
+
+  /// 目标平台已配置 Cookie 时，在加载前注入 WebView，使网页自动处于登录态。
+  Future<void> _injectConfiguredCookie() async {
+    final cookie = SettingsService.to.cookieManager.cookieForPlatform(platform);
+    if (cookie.trim().isEmpty) return;
+    final pairs = parseCookiePairs(cookie);
+    if (pairs.isEmpty) return;
+    final target = WebUri(url);
+    final domain = _cookieDomains[platform.toLowerCase()];
+    // Windows 上必须绑定当前 WebView 控制器：不绑定时插件走临时 WebView2
+    // 创建/销毁路径，在 ICoreWebView2 内部有已知崩溃。
+    final controller = webViewController;
+    var injected = 0;
+    for (final pair in pairs) {
+      try {
+        await cookieManager.setCookie(
+          url: target,
+          name: pair.key,
+          value: pair.value,
+          domain: domain,
+          webViewController: controller,
+        );
+        injected++;
+      } catch (e) {
+        Log.w("⚠️ 注入 Cookie ${pair.key} 失败: $e");
+      }
+    }
+    Log.i("🍪 平台 $platform 已配置 Cookie 自动注入 $injected/${pairs.length} 项");
   }
 
   void onLoadStart(InAppWebViewController controller, WebUri? uri) {

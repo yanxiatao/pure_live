@@ -1,7 +1,7 @@
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
-import 'package:pure_live/modules/account/edge_cookie_capture.dart';
+import 'package:pure_live/modules/account/web_cookie_capture.dart';
 import 'package:pure_live/modules/account/huya/huya_cookie_controller.dart';
 
 class HuyaCookiePage extends GetView<HuyaCookieController> {
@@ -55,16 +55,16 @@ class HuyaCookiePage extends GetView<HuyaCookieController> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      if (PlatformUtils.isWindows) ...[
+                      if (PlatformUtils.isWindows || PlatformUtils.isAndroid) ...[
                         Expanded(
                           child: SizedBox(
                             height: 44,
                             child: OutlinedButton.icon(
-                              onPressed: () => _autoCaptureCookie(context),
+                              onPressed: _autoCaptureCookie,
                               style: OutlinedButton.styleFrom(
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
-                              icon: const Icon(Remix.edge_line, size: 18),
+                              icon: const Icon(Remix.global_line, size: 18),
                               label: Text(
                                 i18n("cookie_auto_capture"),
                                 style: AppTextStyles.t14.copyWith(fontWeight: FontWeight.w600),
@@ -107,11 +107,11 @@ class HuyaCookiePage extends GetView<HuyaCookieController> {
     );
   }
 
-  /// 启动 Edge 自动抓取流程：弹窗展示状态，捕获成功后自动走保存校验链路。
-  Future<void> _autoCaptureCookie(BuildContext context) async {
-    final target = kEdgeCaptureTargets['huya'];
+  /// 启动内置浏览器自动抓取流程：捕获成功后自动走保存校验链路。
+  Future<void> _autoCaptureCookie() async {
+    final target = kCookieCaptureTargets['huya'];
     if (target == null) return;
-    final cookie = await EdgeCookieCapture.showCaptureDialog(context, target);
+    final cookie = await WebCookieCapturePage.capture(target);
     if (cookie == null || cookie.isEmpty) return;
     controller.cookieController.text = cookie;
     await controller.setCookie(cookie);
