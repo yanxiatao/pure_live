@@ -1082,7 +1082,7 @@ class HuyaSite implements LiveSite, LiveSiteRoomRefresher, LiveSiteRecordRoomRes
       ..lPid = lPid
       ..tId = userId
       ..iMessageBoardScope = 0
-      ..iPageSize = 10;
+      ..iPageSize = 50;
 
     final rsp = await messageBoardClient.tupRequest("getHeadLineMessageBoard", req, GetGameEventMessageBoardRsp());
 

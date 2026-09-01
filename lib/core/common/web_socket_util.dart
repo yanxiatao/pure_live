@@ -1,8 +1,6 @@
 import 'dart:async';
-
 import 'dart:io' as io;
 
-import 'package:pure_live/common/services/settings_service.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -11,32 +9,50 @@ typedef WebSocketConnector = WebSocketChannel Function(
   Duration? connectTimeout,
   Iterable<String>? protocols,
   Map<String, dynamic>? headers,
+  io.HttpClient? customClient,
 });
+
+typedef WebSocketProxyDirectiveProvider = String Function(Uri uri);
+
+WebSocketProxyDirectiveProvider? _webSocketProxyDirectiveProvider;
+
+/// Makes every danmaku WebSocket use the same live proxy setting as API and
+/// image requests. The provider is evaluated for each handshake, so changing
+/// the setting does not require recreating every site adapter.
+void configureWebSocketProxyRouting(WebSocketProxyDirectiveProvider? provider) {
+  _webSocketProxyDirectiveProvider = provider;
+}
+
+String resolveWebSocketProxyDirective(Uri uri) {
+  try {
+    return _webSocketProxyDirectiveProvider?.call(uri) ?? 'DIRECT';
+  } catch (_) {
+    return 'DIRECT';
+  }
+}
 
 WebSocketChannel _connectIoWebSocket(
   String endpoint, {
   Duration? connectTimeout,
   Iterable<String>? protocols,
   Map<String, dynamic>? headers,
+  io.HttpClient? customClient,
 }) {
-  // 弹幕连接遵循应用代理设置：启用时经 HTTP 代理的 CONNECT 隧道
-  // （customClient 透传给 dart:io 的 WebSocket.connect，由 findProxy
-  // 自动对 wss/ws 做 CONNECT 隧道化），与 HTTP 请求的代理行为一致。
-  final proxyCtrl = SettingsService.to.proxy;
-  if (proxyCtrl.enableAppProxy.value &&
-      proxyCtrl.appProxyHost.value.trim().isNotEmpty &&
-      proxyCtrl.appProxyPort.value > 0) {
-    final client = io.HttpClient()
-      ..findProxy = (uri) => 'PROXY ${proxyCtrl.appProxyHost.value.trim()}:${proxyCtrl.appProxyPort.value}';
-    return IOWebSocketChannel.connect(
-      endpoint,
-      connectTimeout: connectTimeout,
-      protocols: protocols,
-      headers: headers,
-      customClient: client,
-    );
-  }
-  return IOWebSocketChannel.connect(endpoint, connectTimeout: connectTimeout, protocols: protocols, headers: headers);
+  return IOWebSocketChannel.connect(
+    endpoint,
+    connectTimeout: connectTimeout,
+    protocols: protocols,
+    headers: headers,
+    customClient: customClient,
+  );
+}
+
+io.HttpClient? _createWebSocketHttpClient() {
+  final provider = _webSocketProxyDirectiveProvider;
+  if (provider == null) return null;
+  final client = io.HttpClient()..idleTimeout = const Duration(seconds: 30);
+  client.findProxy = resolveWebSocketProxyDirective;
+  return client;
 }
 
 enum SocketStatus { connected, failed, closed }
@@ -126,14 +142,23 @@ class WebScoketUtils {
 
     try {
       final endpoint = serverUrls[_endpointIndex % serverUrls.length];
+      final customClient = _createWebSocketHttpClient();
       final channel = connector(
         endpoint,
         connectTimeout: const Duration(seconds: 10),
         protocols: protocols,
         headers: headers,
+        customClient: customClient,
       );
       webSocket = channel;
-      await channel.ready;
+      try {
+        await channel.ready;
+      } finally {
+        // The HTTP client is only needed for the upgrade handshake. Closing it
+        // gracefully releases idle proxy connections without terminating the
+        // detached WebSocket transport.
+        customClient?.close(force: false);
+      }
       if (_manualClose || generation != _generation) {
         await channel.sink.close();
         return;
