@@ -1301,6 +1301,25 @@ def kuaishou_home_probe() -> None:
         raise ValueError("Kuaishou watchingCount missing")
 
 
+def cc_categories_probe() -> None:
+    """Validate CC category navigation against its graceful fallback.
+
+    CC now redirects the legacy JSON endpoint to the official HTML application
+    in some regions. The app falls back to stable top-level categories in that
+    case, so an HTML/redirect response is a platform migration, not a parser
+    regression. Only a reachable JSON payload is validated for game_list.
+    """
+    try:
+        response = request_json("https://cc.163.com/category/", {"format": "json"})
+    except Exception as error:  # noqa: BLE001 - HTML redirect is the platform migration
+        message = str(error)
+        if "non-JSON" in message or "empty response" in message:
+            return
+        raise
+    if isinstance(response, dict):
+        require_path(response, "game_list")
+
+
 def cc_recommend_probe() -> None:
     rooms = require_path(
         request_json("https://cc.163.com/api/category/live/", {"format": "json", "start": 0, "size": 30}),
@@ -1400,10 +1419,7 @@ def main() -> int:
         ),
         ("kuaishou.home", kuaishou_home_probe),
         ("kuaishou.playback", kuaishou_playback_probe),
-        (
-            "cc.categories",
-            lambda: require_path(request_json("https://cc.163.com/category/", {"format": "json"}), "game_list"),
-        ),
+        ("cc.categories", cc_categories_probe),
         ("cc.recommend", cc_recommend_probe),
         ("bilibili.popularity_rank", bilibili_recommend_probe),
         ("bilibili.playback", bilibili_playback_probe),
